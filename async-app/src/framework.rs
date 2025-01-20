@@ -45,12 +45,15 @@ macro_rules! send {
             if let Some(app_state_any) = guard.as_mut() {
                 app_state_any.pending_callbacks.insert(
                     correlation_id.clone(),
-                    Box::new(move |$resp: &[u8], any_state: &mut dyn std::any::Any| {
-                        // Here’s where the macro uses $user_state_ty from the pattern:
+                    Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
+                        // Deserialize the response bytes into AsyncResponse
+                        let $resp = serde_json::from_slice(resp_bytes)
+                            .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))?;
+                        
                         let $st = any_state
                             .downcast_mut::<$user_state_ty>()
                             .ok_or_else(|| anyhow::anyhow!("Downcast failed!"))?;
-                        // Then just run the user’s code block:
+                        
                         $callback_block
                         Ok(())
                     }),

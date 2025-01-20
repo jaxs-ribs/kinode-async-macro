@@ -44,19 +44,18 @@ fn my_local_request(
     send!(
         receiver_address(),
         AsyncRequest::StepA("Yes hello".to_string()),
-        (response_bytes, state: MyState) {
-            custom_msg_handler(response_bytes, state);
+        (response, state: MyState) {
+            custom_msg_handler(response, state);
         }
     );
 }
 
-fn custom_msg_handler(resp_bytes: &[u8], user_st: &mut MyState) {
-    kiprintln!(
-        "Async callback! got {}",
-        String::from_utf8_lossy(resp_bytes)
-    );
-    user_st.counter += 10;
-    kiprintln!("New counter: {}", user_st.counter);
+fn custom_msg_handler(response: AsyncResponse, user_st: &mut MyState) {
+    if let AsyncResponse::StepA(msg) = response {
+        kiprintln!("Async callback! got {}", msg);
+        user_st.counter += 10;
+        kiprintln!("New counter: {}", user_st.counter);
+    }
 }
 
 Erect!(
