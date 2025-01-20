@@ -31,12 +31,73 @@ impl AppState {
 /// A single global that holds the entire application state
 pub static GLOBAL_APP_STATE: Lazy<Mutex<Option<AppState>>> = Lazy::new(|| Mutex::new(None));
 
+/// Sends an asynchronous request and handles the response with a callback.
+///
+/// This macro provides a convenient way to send messages to other processes and handle their responses
+/// asynchronously. It automatically manages correlation IDs and callback registration.
+///
+/// # Arguments
+///
+/// * `destination` - The destination address to send the message to
+/// * `body` - The message body to send
+/// * `callback` - A callback block that receives the response and state, in the form:
+///   `(resp, state: StateType) { ... }`
+/// * `timeout` - (Optional) Timeout in seconds. Defaults to 30 if not specified
+///
+/// # Type Parameters
+///
+/// * `StateType` - The concrete type of your application state
+/// * `resp` - The expected response type that will be deserialized from the response bytes
+///
+/// # Examples
+///
+/// ```rust
+/// // Basic usage with default 30 second timeout
+/// send!(
+///     "other_process:other_package:sys",
+///     my_request,
+///     (response, state: MyAppState) {
+///         println!("Got response: {:?}", response);
+///         state.update_from_response(response);
+///     }
+/// );
+///
+/// // Usage with custom timeout (60 seconds)
+/// send!(
+///     "other_process:other_package:sys",
+///     my_request,
+///     (response, state: MyAppState) {
+///         println!("Got response: {:?}", response);
+///         state.update_from_response(response);
+///     },
+///     60
+/// );
+/// ```
+///
+/// # Notes
+///
+/// - The callback is executed with the application state locked, so keep callbacks brief
+/// - The response parameter in the callback will be automatically deserialized from JSON
+/// - If the timeout is reached before a response is received, the callback will not be executed
+/// - The state is automatically saved after the callback completes
+///
 #[macro_export]
 macro_rules! send {
+    // Original version with default timeout
     (
         $destination:expr,
         $body:expr,
         ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block
+    ) => {
+        $crate::send!($destination, $body, ($resp, $st: $user_state_ty) $callback_block, 30)
+    };
+
+    // Version with explicit timeout
+    (
+        $destination:expr,
+        $body:expr,
+        ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block,
+        $timeout:expr
     ) => {{
         // 1) Generate a correlation_id, insert a callback with a closure that does downcast to $user_state_ty
         let correlation_id = uuid::Uuid::new_v4().to_string();
@@ -65,7 +126,7 @@ macro_rules! send {
         let _ = kinode_process_lib::Request::to($destination)
             .context(correlation_id.as_bytes())
             .body($body)
-            .expects_response(30)
+            .expects_response($timeout)
             .send();
     }};
 }
