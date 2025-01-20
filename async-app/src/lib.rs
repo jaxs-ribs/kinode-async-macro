@@ -44,13 +44,13 @@ fn my_local_request(
     send_async!(
         receiver_address(),
         AsyncRequest::StepA("Yes hello".to_string()),
-        (b, state: MyState) {
-            a(b, state);
+        (response_bytes, state: MyState) {
+            custom_msg_handler(response_bytes, state);
         }
     );
 }
 
-fn a(resp_bytes: &[u8], user_st: &mut MyState) {
+fn custom_msg_handler(resp_bytes: &[u8], user_st: &mut MyState) {
     kiprintln!(
         "Async callback! got {}",
         String::from_utf8_lossy(resp_bytes)
