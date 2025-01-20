@@ -7,6 +7,13 @@ pub enum AsyncRequest {
     StepC(String),
 }
 
+#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+pub enum AsyncResponse {
+    StepA(String),
+    StepB(String),
+    StepC(String),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MyState {
     pub counter: u64,
