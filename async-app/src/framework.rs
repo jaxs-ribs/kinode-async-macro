@@ -49,11 +49,11 @@ macro_rules! send {
                         // Deserialize the response bytes into AsyncResponse
                         let $resp = serde_json::from_slice(resp_bytes)
                             .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))?;
-                        
+
                         let $st = any_state
                             .downcast_mut::<$user_state_ty>()
                             .ok_or_else(|| anyhow::anyhow!("Downcast failed!"))?;
-                        
+
                         $callback_block
                         Ok(())
                     }),
@@ -69,7 +69,6 @@ macro_rules! send {
             .send();
     }};
 }
-
 
 /// Trait that must be implemented by application state types
 pub trait State {
@@ -135,7 +134,10 @@ where
             match await_message() {
                 // If we get a SendError:
                 Err(send_error) => {
-                    kiprintln!("Got send_error: {:#?}, locking global to handle_send_error", send_error);
+                    kiprintln!(
+                        "Got send_error: {:#?}, locking global to handle_send_error",
+                        send_error
+                    );
                     let mut guard = GLOBAL_APP_STATE.lock().unwrap();
                     if let Some(app_st) = guard.as_mut() {
                         if let Some(s) = app_st.user_state.downcast_mut::<S>() {
