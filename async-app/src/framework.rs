@@ -334,19 +334,6 @@ fn remote_request<S, T>(
     handle_remote_request(message, state, server, request);
 }
 
-/// Utility for pushing WebSocket updates
-/// TODO: Zena
-pub fn send_ws_update<B>(server: &http::server::HttpServer, bytes: B)
-where
-    B: Into<Vec<u8>>,
-{
-    server.ws_push_all_channels(
-        "/updates",
-        http::server::WsMessageType::Text,
-        LazyLoadBlob::new(Some("application/json"), bytes),
-    );
-}
-
 /// -------------- 3) The "app!" macros for exporting  ----------------
 // same as your original code. Now they will use the new `app()` function
 #[macro_export]
