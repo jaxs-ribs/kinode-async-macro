@@ -65,7 +65,7 @@ macro_rules! send {
         let _ = kinode_process_lib::Request::to($destination)
             .context(correlation_id.as_bytes())
             .body($body)
-            .expects_response(10)
+            .expects_response(30)
             .send();
     }};
 }
