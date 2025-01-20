@@ -41,7 +41,7 @@ fn my_local_request(
     _server: &mut HttpServer,
     _request: String,
 ) {
-    send_async_for!(
+    send_async!(
         receiver_address(),
         AsyncRequest::StepA("Yes hello".to_string()),
         (b, state: MyState) {
@@ -59,7 +59,7 @@ fn a(resp_bytes: &[u8], user_st: &mut MyState) {
     kiprintln!("New counter: {}", user_st.counter);
 }
 
-app!(
+erect!(
     "My Example App",
     None,
     None,

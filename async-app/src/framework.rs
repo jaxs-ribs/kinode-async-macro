@@ -32,7 +32,7 @@ impl AppState {
 pub static GLOBAL_APP_STATE: Lazy<Mutex<Option<AppState>>> = Lazy::new(|| Mutex::new(None));
 
 #[macro_export]
-macro_rules! send_async_for {
+macro_rules! send_async {
     (
         $destination:expr,
         $body:expr,
@@ -337,7 +337,7 @@ fn remote_request<S, T>(
 /// -------------- 3) The "app!" macros for exporting  ----------------
 // same as your original code. Now they will use the new `app()` function
 #[macro_export]
-macro_rules! app {
+macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident) => {
         struct Component;
         impl Guest for Component {
