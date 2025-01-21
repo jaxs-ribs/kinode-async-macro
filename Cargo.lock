@@ -694,6 +694,7 @@ name = "async-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "kinode_app_common",
  "kinode_process_lib",
  "once_cell",
  "process_macros",
@@ -1805,6 +1806,20 @@ checksum = "505d1856a39b200489082f90d897c3f07c455563880bc5952e38eabf731c83b6"
 dependencies = [
  "digest 0.10.7",
  "sha3-asm",
+]
+
+[[package]]
+name = "kinode_app_common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "kinode_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wit-bindgen",
 ]
 
 [[package]]

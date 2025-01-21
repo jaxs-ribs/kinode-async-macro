@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "async-app",
-]
+members = ["async-app", "kinode_app_common"]
 
 [profile.release]
 panic = "abort"
