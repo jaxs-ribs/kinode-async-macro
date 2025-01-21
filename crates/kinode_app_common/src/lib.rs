@@ -507,7 +507,7 @@ fn pretty_print_send_error(error: &SendError) {
 
 /// -------------- 3) The "app!" macros for exporting  ----------------
 #[macro_export]
-macro_rules! Erect {
+macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident) => {
         struct Component;
         impl Guest for Component {

@@ -10,8 +10,14 @@ pub enum AsyncRequest {
 #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
 pub enum AsyncResponse {
     StepA(String),
-    StepB(String),
+    StepB(TempStruct),
     StepC(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+pub struct TempStruct {
+    pub counter: u64,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -4,10 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use kinode_process_lib::http::StatusCode;
 use process_macros::SerdeJsonInto;
-use kinode_app_common::send;
-use kinode_app_common::Erect;
+use kinode_app_common::erect;
 use kinode_app_common::State;
 
+use proc_macro_send::send_async;
+
+use crate::AsyncResponse;
+use crate::AsyncRequest;
 mod structs;
 
 use structs::*;
@@ -42,29 +45,27 @@ fn my_local_request(
     _server: &mut HttpServer,
     _request: String,
 ) {
-    send!(
+    send_async!(
         receiver_address(),
-        AsyncRequest::StepA("Yes hello".to_string()),
-        (response, state: MyState) {
-            custom_msg_handler(response, state);
+        AsyncRequest::StepB("Yes hello".to_string()),
+        (resp, st: MyState) {
+            custom_handler(resp, st);
         },
         30,
         on_timeout => {
-            kiprintln!("Request to 'receiver_address()' timed out!");
-            state.counter -= 1;
+            println!("timed out!");
+            st.counter -= 1;
         }
     );
 }
 
-fn custom_msg_handler(response: AsyncResponse, user_st: &mut MyState) {
-    if let AsyncResponse::StepA(msg) = response {
-        kiprintln!("Async callback! got {}", msg);
-        user_st.counter += 10;
-        kiprintln!("New counter: {}", user_st.counter);
-    }
+fn custom_handler(response: TempStruct, state: &mut MyState) {
+    kiprintln!("{}", response.message);
+    kiprintln!("{}", state.counter);
+    state.counter += 1;
 }
 
-Erect!(
+erect!(
     "My Example App",
     None,
     None,
