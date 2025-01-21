@@ -7,16 +7,18 @@ use once_cell::sync::Lazy;
 
 use kinode_process_lib::{
     await_message, get_typed_state, homepage, http, kiprintln, set_state, Address, LazyLoadBlob,
-    Message, SendError,
+    Message, SendError, SendErrorKind,
 };
 
 /// We store the user's state as `dyn Any + Send`, plus the callback map.
 pub struct AppState {
     pub user_state: Box<dyn Any + Send>,
-    pub pending_callbacks: HashMap<
-        String, // correlation_id
-        Box<dyn FnOnce(&[u8], &mut dyn Any) -> anyhow::Result<()> + Send>,
-    >,
+    pub pending_callbacks: HashMap<String, PendingCallback>,
+}
+
+pub struct PendingCallback {
+    pub on_success: Box<dyn FnOnce(&[u8], &mut dyn Any) -> anyhow::Result<()> + Send>,
+    pub on_timeout: Option<Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>>,
 }
 
 impl AppState {
@@ -31,98 +33,102 @@ impl AppState {
 /// A single global that holds the entire application state
 pub static GLOBAL_APP_STATE: Lazy<Mutex<Option<AppState>>> = Lazy::new(|| Mutex::new(None));
 
-/// Sends an asynchronous request and handles the response with a callback.
-///
-/// This macro provides a convenient way to send messages to other processes and handle their responses
-/// asynchronously. It automatically manages correlation IDs and callback registration.
-///
-/// # Arguments
-///
-/// * `destination` - The destination address to send the message to
-/// * `body` - The message body to send
-/// * `callback` - A callback block that receives the response and state, in the form:
-///   `(resp, state: StateType) { ... }`
-/// * `timeout` - (Optional) Timeout in seconds. Defaults to 30 if not specified
-///
-/// # Type Parameters
-///
-/// * `StateType` - The concrete type of your application state
-/// * `resp` - The expected response type that will be deserialized from the response bytes
-///
-/// # Examples
-///
-/// ```rust
-/// // Basic usage with default 30 second timeout
-/// send!(
-///     "other_process:other_package:sys",
-///     my_request,
-///     (response, state: MyAppState) {
-///         println!("Got response: {:?}", response);
-///         state.update_from_response(response);
-///     }
-/// );
-///
-/// // Usage with custom timeout (60 seconds)
-/// send!(
-///     "other_process:other_package:sys",
-///     my_request,
-///     (response, state: MyAppState) {
-///         println!("Got response: {:?}", response);
-///         state.update_from_response(response);
-///     },
-///     60
-/// );
-/// ```
-///
-/// # Notes
-///
-/// - The callback is executed with the application state locked, so keep callbacks brief
-/// - The response parameter in the callback will be automatically deserialized from JSON
-/// - If the timeout is reached before a response is received, the callback will not be executed
-/// - The state is automatically saved after the callback completes
-///
 #[macro_export]
 macro_rules! send {
-    // Original version with default timeout
+    // ---------------------------------------------------------------------
+    // 1) Original version (no explicit timeout, no on_timeout)
+    // ---------------------------------------------------------------------
     (
         $destination:expr,
         $body:expr,
         ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block
     ) => {
-        $crate::send!($destination, $body, ($resp, $st: $user_state_ty) $callback_block, 30)
+        $crate::send!($destination, $body, ($resp, $st: $user_state_ty) $callback_block, 30);
     };
 
-    // Version with explicit timeout
+    // ---------------------------------------------------------------------
+    // 2) Version with explicit timeout, but no on_timeout block
+    // ---------------------------------------------------------------------
     (
         $destination:expr,
         $body:expr,
         ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block,
         $timeout:expr
     ) => {{
-        // 1) Generate a correlation_id, insert a callback with a closure that does downcast to $user_state_ty
+        // Insert a callback with no on_timeout
         let correlation_id = uuid::Uuid::new_v4().to_string();
         {
             let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
             if let Some(app_state_any) = guard.as_mut() {
                 app_state_any.pending_callbacks.insert(
                     correlation_id.clone(),
-                    Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
-                        // Deserialize the response bytes into AsyncResponse
-                        let $resp = serde_json::from_slice(resp_bytes)
-                            .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))?;
-
-                        let $st = any_state
-                            .downcast_mut::<$user_state_ty>()
-                            .ok_or_else(|| anyhow::anyhow!("Downcast failed!"))?;
-
-                        $callback_block
-                        Ok(())
-                    }),
+                    $crate::PendingCallback {
+                        on_success: Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
+                            // success
+                            let $resp = serde_json::from_slice(resp_bytes).map_err(|e| {
+                                anyhow::anyhow!("Failed to deserialize response: {}", e)
+                            })?;
+                            let $st = any_state.downcast_mut::<$user_state_ty>().ok_or_else(|| {
+                                anyhow::anyhow!("Downcast failed!")
+                            })?;
+                            $callback_block
+                            Ok(())
+                        }),
+                        on_timeout: None, // no custom timeout callback
+                    },
                 );
             }
         }
 
-        // 2) Send the actual request
+        // Send the request with $timeout
+        let _ = kinode_process_lib::Request::to($destination)
+            .context(correlation_id.as_bytes())
+            .body($body)
+            .expects_response($timeout)
+            .send();
+    }};
+
+    // ---------------------------------------------------------------------
+    // 3) Version with explicit timeout AND an on_timeout block
+    // ---------------------------------------------------------------------
+    (
+        $destination:expr,
+        $body:expr,
+        ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block,
+        $timeout:expr,
+        on_timeout => $timeout_block:block
+    ) => {{
+        let correlation_id = uuid::Uuid::new_v4().to_string();
+        {
+            let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
+            if let Some(app_state_any) = guard.as_mut() {
+                app_state_any.pending_callbacks.insert(
+                    correlation_id.clone(),
+                    $crate::PendingCallback {
+                        // ========== On Success ==========
+                        on_success: Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
+                            let $resp = serde_json::from_slice(resp_bytes).map_err(|e| {
+                                anyhow::anyhow!("Failed to deserialize response: {}", e)
+                            })?;
+                            let $st = any_state.downcast_mut::<$user_state_ty>().ok_or_else(|| {
+                                anyhow::anyhow!("Downcast failed!")
+                            })?;
+                            $callback_block
+                            Ok(())
+                        }),
+                        // ========== On Timeout ==========
+                        on_timeout: Some(Box::new(move |any_state: &mut dyn std::any::Any| {
+                            let $st = any_state
+                                .downcast_mut::<$user_state_ty>()
+                                .ok_or_else(|| anyhow::anyhow!("Downcast failed!"))?;
+                            $timeout_block
+                            Ok(())
+                        })),
+                    },
+                );
+            }
+        }
+
         let _ = kinode_process_lib::Request::to($destination)
             .context(correlation_id.as_bytes())
             .body($body)
@@ -193,23 +199,91 @@ where
         // 3) main loop
         loop {
             match await_message() {
-                // If we get a SendError:
+                // -------------------------------------------------------
+                // Handle SendError (timeout, disconnected, etc.)
+                // -------------------------------------------------------
                 Err(send_error) => {
-                    kiprintln!(
-                        "Got send_error: {:#?}, locking global to handle_send_error",
-                        send_error
-                    );
-                    let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                    if let Some(app_st) = guard.as_mut() {
-                        if let Some(s) = app_st.user_state.downcast_mut::<S>() {
-                            handle_send_error(s, &mut server, send_error);
+                    kiprintln!("Got send_error: {:#?}", send_error);
+
+                    // We'll extract the correlation_id from send_error.context()
+                    let correlation_id = send_error
+                        .context
+                        .as_ref()
+                        .map(|bytes| String::from_utf8_lossy(bytes).to_string());
+
+                    let mut maybe_state: Option<S> = None;
+                    // This must match `Option<Box<dyn FnOnce(&mut dyn Any) -> ... + Send>>`
+                    let mut maybe_timeout_callback: Option<
+                        Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>,
+                    > = None;
+
+                    {
+                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
+                        if let Some(app_state) = guard.as_mut() {
+                            // Extract user state S by "taking it out"
+                            let original_box =
+                                std::mem::replace(&mut app_state.user_state, Box::new(()));
+                            if original_box.is::<S>() {
+                                if let Ok(real_s_box) = original_box.downcast::<S>() {
+                                    let s = *real_s_box;
+                                    maybe_state = Some(s);
+                                }
+                            } else {
+                                // Put back the original box since we know it's not our type
+                                app_state.user_state = original_box;
+                            }
+
+                            // If there's a correlation_id, see if there's a matching callback
+                            if let Some(cid) = &correlation_id {
+                                if let Some(pending) = app_state.pending_callbacks.remove(cid) {
+                                    // Check if the error was a Timeout. Because we can't do ==,
+                                    // we match on send_error.kind directly.
+                                    match send_error.kind {
+                                        SendErrorKind::Timeout => {
+                                            // Use on_timeout if present
+                                            maybe_timeout_callback = pending.on_timeout;
+                                        }
+                                        // For any other kind, we won't auto-run the success or timeout.
+                                        // Just let handle_send_error handle it.
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // If we have a user-defined on_timeout callback, run it
+                    if let Some(ref mut state) = maybe_state {
+                        if let Some(cb) = maybe_timeout_callback {
+                            if let Err(e) = cb(state as &mut dyn Any) {
+                                kiprintln!("Error in on_timeout callback: {e}");
+                            }
+                        } else {
+                            // Fall back to normal handle_send_error
+                            handle_send_error(state, &mut server, send_error);
+                        }
+                    }
+
+                    // put S back and persist
+                    {
+                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
+                        if let Some(app_state) = guard.as_mut() {
+                            if let Some(s) = maybe_state.take() {
+                                app_state.user_state = Box::new(s);
+                            }
+                            if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
+                                if let Ok(s_bytes) = serde_json::to_vec(state_ref) {
+                                    let _ = set_state(&s_bytes);
+                                }
+                            }
                         }
                     }
                 }
 
+                // -------------------------------------------------------
                 // Otherwise, normal message
+                // -------------------------------------------------------
                 Ok(message) => {
-                    // (A) We'll store them in separate variables
                     let mut maybe_callback: Option<
                         Box<dyn FnOnce(&[u8], &mut dyn Any) -> anyhow::Result<()> + Send>,
                     > = None;
@@ -225,24 +299,23 @@ where
 
                         if let Some(app_state) = guard.as_mut() {
                             if let Some(cid) = correlation_id {
-                                if let Some(cb) = app_state.pending_callbacks.remove(&cid) {
-                                    // Save the callback
-                                    maybe_callback = Some(cb);
+                                if let Some(pending) = app_state.pending_callbacks.remove(&cid) {
+                                    // We only want the on_success closure here:
+                                    maybe_callback = Some(pending.on_success);
 
                                     // Take the user_state out of the struct
                                     let original_box =
                                         replace(&mut app_state.user_state, Box::new(()));
 
                                     // Try to downcast to S
-                                    match original_box.downcast::<S>() {
-                                        Ok(real_s_box) => {
+                                    if original_box.is::<S>() {
+                                        if let Ok(real_s_box) = original_box.downcast::<S>() {
                                             let s = *real_s_box;
                                             maybe_state = Some(s);
                                         }
-                                        Err(unboxed_any) => {
-                                            // Put it back if downcast failed
-                                            app_state.user_state = unboxed_any;
-                                        }
+                                    } else {
+                                        // Put back the original box since we know it's not our type
+                                        app_state.user_state = original_box;
                                     }
                                 }
                             }
@@ -342,7 +415,7 @@ fn http_request<S, T1>(
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(&message.body())
+    let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
         .expect("failed to parse HTTP request");
 
     server.handle_request(
@@ -377,7 +450,7 @@ fn local_request<S, T>(
     S: std::fmt::Debug,
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let Ok(request) = serde_json::from_slice::<T>(&message.body()) else {
+    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
         if message.body() == b"debug" {
             kiprintln!("state:\n{:#?}", state);
         }
@@ -394,14 +467,13 @@ fn remote_request<S, T>(
 ) where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let Ok(request) = serde_json::from_slice::<T>(&message.body()) else {
+    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
         return;
     };
     handle_remote_request(message, state, server, request);
 }
 
 /// -------------- 3) The "app!" macros for exporting  ----------------
-// same as your original code. Now they will use the new `app()` function
 #[macro_export]
 macro_rules! Erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident) => {
