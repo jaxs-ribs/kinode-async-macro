@@ -7,3 +7,6 @@ pkg/*.zip
 */wasi_snapshot_preview1.wasm
 */wit/
 */process_env
+**/target/
+
+
