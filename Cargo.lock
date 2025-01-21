@@ -1817,8 +1817,8 @@ dependencies = [
  "kinode_process_lib",
  "once_cell",
  "process_macros",
+ "rmp-serde",
  "serde",
- "serde_json",
  "uuid",
  "wit-bindgen",
 ]

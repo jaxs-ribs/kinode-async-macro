@@ -182,13 +182,9 @@ where
             .bind_ws_path("/updates", http::server::WsBindingConfig::default())
             .expect("failed to bind WS path");
 
-        // 1) Load or init the typed state
-        let existing =
-            get_typed_state(|bytes| serde_json::from_slice::<S>(bytes)).unwrap_or_else(|| {
-                let state = S::new();
-                set_state(&serde_json::to_vec(&state).expect("failed to serialize state to bytes"));
-                state
-            });
+        // 1) Load or init the typed state - now with rmp-serde and panic on failure
+        let existing = get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes))
+            .expect("Failed to deserialize state");
 
         // 2) Put the user's S into the global as Box<dyn Any>
         {
@@ -272,7 +268,7 @@ where
                                 app_state.user_state = Box::new(s);
                             }
                             if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
-                                if let Ok(s_bytes) = serde_json::to_vec(state_ref) {
+                                if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
                                     let _ = set_state(&s_bytes);
                                 }
                             }
@@ -338,7 +334,7 @@ where
                                     app_state.user_state = Box::new(s);
                                 }
                                 if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
-                                    if let Ok(s_bytes) = serde_json::to_vec(state_ref) {
+                                    if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
                                         let _ = set_state(&s_bytes);
                                     }
                                 }
@@ -394,7 +390,7 @@ where
                                 app_state.user_state = Box::new(s);
                             }
                             if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
-                                if let Ok(s_bytes) = serde_json::to_vec(state_ref) {
+                                if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
                                     let _ = set_state(&s_bytes);
                                 }
                             }
@@ -415,7 +411,7 @@ fn http_request<S, T1>(
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
+    let http_request = rmp_serde::from_slice::<http::server::HttpServerRequest>(message.body())
         .expect("failed to parse HTTP request");
 
     server.handle_request(
@@ -425,7 +421,7 @@ fn http_request<S, T1>(
             let Some(blob) = message.blob() else {
                 return (response.set_status(400), None);
             };
-            let Ok(call) = serde_json::from_slice::<T1>(blob.bytes()) else {
+            let Ok(call) = rmp_serde::from_slice::<T1>(blob.bytes()) else {
                 return (response.set_status(400), None);
             };
 
@@ -450,7 +446,7 @@ fn local_request<S, T>(
     S: std::fmt::Debug,
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
+    let Ok(request) = rmp_serde::from_slice::<T>(message.body()) else {
         if message.body() == b"debug" {
             kiprintln!("state:\n{:#?}", state);
         }
@@ -467,7 +463,7 @@ fn remote_request<S, T>(
 ) where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
+    let Ok(request) = rmp_serde::from_slice::<T>(message.body()) else {
         return;
     };
     handle_remote_request(message, state, server, request);

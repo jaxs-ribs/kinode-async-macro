@@ -26,13 +26,13 @@ wit_bindgen::generate!({
     additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
 });
 
-fn my_api_handler(_state: &mut MyState, _payload: String) -> (HttpResponse, Vec<u8>) {
+fn my_api_handler(_state: &mut AppState, _payload: String) -> (HttpResponse, Vec<u8>) {
     (HttpResponse::new(StatusCode::OK), "".as_bytes().to_vec())
 }
 
 fn my_remote_request(
     _message: &Message,
-    _state: &mut MyState,
+    _state: &mut AppState,
     _server: &mut HttpServer,
     _request: String,
 ) {
@@ -41,26 +41,60 @@ fn my_remote_request(
 
 fn my_local_request(
     _message: &Message,
-    _state: &mut MyState,
+    _state: &mut AppState,
     _server: &mut HttpServer,
     _request: String,
 ) {
     send_async!(
         receiver_address(),
-        AsyncRequest::StepB("Yes hello".to_string()),
-        (resp, st: MyState) {
-            custom_handler(resp, st);
+        AsyncRequest::StepA("Yes hello".to_string()),
+        (resp, st: AppState) {
+            custom_handler_a(resp, st);
         },
-        30,
-        on_timeout => {
-            println!("timed out!");
-            st.counter -= 1;
-        }
+    );
+
+    // send_async!(
+    //     receiver_address(),
+    //     AsyncRequest::StepB("Yes hello".to_string()),
+    //     (resp, st: AppState) {
+    //         custom_handler(resp, st);
+    //     },
+    //     30,
+    //     on_timeout => {
+    //         println!("timed out!");
+    //         st.counter -= 1;
+    //     }
+    // );
+}
+
+fn custom_handler_a(response: String, state: &mut AppState) {
+    kiprintln!("{}", response);
+    kiprintln!("{}", state.counter);
+    state.counter += 1;
+    send_async!(
+        receiver_address(),
+        AsyncRequest::StepB("Yes hello".to_string()),
+        (resp, st: AppState) {
+            custom_handler_b(resp, st);
+        },
     );
 }
 
-fn custom_handler(response: TempStruct, state: &mut MyState) {
-    kiprintln!("{}", response.message);
+fn custom_handler_b(response: String, state: &mut AppState) {
+    kiprintln!("{}", response);
+    kiprintln!("{}", state.counter);
+    state.counter += 1;
+    send_async!(
+        receiver_address(),
+        AsyncRequest::StepC("Yes hello".to_string()),
+        (resp, st: AppState) {
+            custom_handler_c(resp, st);
+        },
+    );
+}
+
+fn custom_handler_c(response: String, state: &mut AppState) {
+    kiprintln!("{}", response);
     kiprintln!("{}", state.counter);
     state.counter += 1;
 }

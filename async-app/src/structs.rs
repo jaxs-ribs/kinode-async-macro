@@ -10,7 +10,7 @@ pub enum AsyncRequest {
 #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
 pub enum AsyncResponse {
     StepA(String),
-    StepB(TempStruct),
+    StepB(String),
     StepC(String),
 }
 
@@ -21,11 +21,11 @@ pub struct TempStruct {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MyState {
+pub struct AppState {
     pub counter: u64,
 }
 
-impl State for MyState {
+impl State for AppState {
     fn new() -> Self {
         Self { counter: 0 }
     }
