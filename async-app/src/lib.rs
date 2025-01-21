@@ -47,7 +47,7 @@ fn my_local_request(
         (response, state: MyState) {
             custom_msg_handler(response, state);
         },
-        2,
+        30,
         on_timeout => {
             kiprintln!("Request to 'receiver_address()' timed out!");
             state.counter -= 1;

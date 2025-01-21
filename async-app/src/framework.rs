@@ -203,7 +203,7 @@ where
                 // Handle SendError (timeout, disconnected, etc.)
                 // -------------------------------------------------------
                 Err(send_error) => {
-                    kiprintln!("Got send_error: {:#?}", send_error);
+                    pretty_print_send_error(&send_error);
 
                     // We'll extract the correlation_id from send_error.context()
                     let correlation_id = send_error
@@ -471,6 +471,38 @@ fn remote_request<S, T>(
         return;
     };
     handle_remote_request(message, state, server, request);
+}
+
+/// Pretty prints a SendError in a more readable format
+fn pretty_print_send_error(error: &SendError) {
+    let kind = &error.kind;
+    let target = &error.target;
+    
+    // Try to decode body as UTF-8 string, fall back to showing as bytes
+    let body = String::from_utf8(error.message.body().to_vec())
+        .map(|s| format!("\"{}\"", s))
+        .unwrap_or_else(|_| format!("{:?}", error.message.body()));
+
+    // Try to decode context as UTF-8 string
+    let context = error
+        .context
+        .as_ref()
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+
+    kiprintln!(
+        "SendError {{
+    kind: {:?},
+    target: {},
+    body: {},
+    context: {}
+}}",
+        kind,
+        target,
+        body,
+        context
+            .map(|s| format!("\"{}\"", s))
+            .unwrap_or("None".to_string())
+    );
 }
 
 /// -------------- 3) The "app!" macros for exporting  ----------------
