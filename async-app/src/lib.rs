@@ -3,21 +3,22 @@ use kinode_process_lib::{kiprintln, Address, Message};
 use serde::{Deserialize, Serialize};
 
 use kinode_process_lib::http::StatusCode;
-use process_macros::SerdeJsonInto;
-use kinode_app_common::{declare_types, erect};
+use kinode_app_common::erect;
 use kinode_app_common::State;
+use shared::receiver_address;
 
 use proc_macro_send::send_async;
 
-use crate::AsyncResponse;
-use crate::AsyncRequest;
 mod structs;
+mod http_handlers;
+mod kino_local_handlers;
+mod kino_remote_handlers;
 
 use structs::*;
-
-pub fn receiver_address() -> Address {
-    ("our", "async-receiver", "async-callbacks", "template.os").into()
-}
+use shared::*;
+use http_handlers::*;
+use kino_local_handlers::*;
+use kino_remote_handlers::*;
 
 wit_bindgen::generate!({
     path: "target/wit",
@@ -25,91 +26,6 @@ wit_bindgen::generate!({
     generate_unused_types: true,
     additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
 });
-
-declare_types! {
-    Subtext {
-        StepA String => i32
-        StepB i32 => u64
-        StepC u64 => String
-    },
-    Commodore {
-        Power SomeStruct => SomeOtherStruct
-        Excitement i32 => Result<String, String>
-    },
-}
-
-fn my_api_handler(_state: &mut AppState, _payload: String) -> (HttpResponse, Vec<u8>) {
-    (HttpResponse::new(StatusCode::OK), "".as_bytes().to_vec())
-}
-
-fn my_remote_request(
-    _message: &Message,
-    _state: &mut AppState,
-    _server: &mut HttpServer,
-    _request: String,
-) {
-    kiprintln!("Hi2");
-}
-
-fn my_local_request(
-    _message: &Message,
-    _state: &mut AppState,
-    _server: &mut HttpServer,
-    _request: String,
-) {
-    send_async!(
-        receiver_address(),
-        AsyncRequest::StepA("Yes hello".to_string()),
-        (resp, st: AppState) {
-            custom_handler_a(resp, st);
-        },
-    );
-
-    // send_async!(
-    //     receiver_address(),
-    //     AsyncRequest::StepB("Yes hello".to_string()),
-    //     (resp, st: AppState) {
-    //         custom_handler(resp, st);
-    //     },
-    //     30,
-    //     on_timeout => {
-    //         println!("timed out!");
-    //         st.counter -= 1;
-    //     }
-    // );
-}
-
-fn custom_handler_a(response: String, state: &mut AppState) {
-    kiprintln!("{}", response);
-    kiprintln!("{}", state.counter);
-    state.counter += 1;
-    send_async!(
-        receiver_address(),
-        AsyncRequest::StepB("Yes hello".to_string()),
-        (resp, st: AppState) {
-            custom_handler_b(resp, st);
-        },
-    );
-}
-
-fn custom_handler_b(response: String, state: &mut AppState) {
-    kiprintln!("{}", response);
-    kiprintln!("{}", state.counter);
-    state.counter += 1;
-    send_async!(
-        receiver_address(),
-        AsyncRequest::StepC("Yes hello".to_string()),
-        (resp, st: AppState) {
-            custom_handler_c(resp, st);
-        },
-    );
-}
-
-fn custom_handler_c(response: String, state: &mut AppState) {
-    kiprintln!("{}", response);
-    kiprintln!("{}", state.counter);
-    state.counter += 1;
-}
 
 erect!(
     "My Example App",

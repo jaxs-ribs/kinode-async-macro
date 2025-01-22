@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["async-app"]
+members = ["async-app", "lib/shared"]
 
 [profile.release]
 panic = "abort"
