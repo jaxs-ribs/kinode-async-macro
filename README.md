@@ -1,6 +1,6 @@
 # 🔥🚀🤘 Kinode Processes 2.0 🔥🚀🤘
 
-Adapted from Dorias [kinode-app-framework](https://github.com/kinode-dao/app-framework/tree/main).
+Shoutout to Doria (@dr-frmr) for the [initial app idea](https://github.com/kinode-dao/app-framework/tree/main), this is just a lot of sugar on top.
 
 ## How it Works
 
