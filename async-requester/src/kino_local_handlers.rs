@@ -5,7 +5,7 @@ use crate::*;
 /// Then we will message the async receiver who will sleep 3s then answer.
 pub fn kino_local_handler(
     _message: &Message,
-    _state: &mut AppState,
+    _state: &mut ProcessState,
     _server: &mut HttpServer,
     _request: String,
 ) {
@@ -14,7 +14,7 @@ pub fn kino_local_handler(
     send_async!(
         receiver_address(),
         AsyncRequest::StepA("Mashed Potatoes".to_string()),
-        (resp, st: AppState) {
+        (resp, st: ProcessState) {
             on_step_a(resp, st);
         },
     );
@@ -37,33 +37,33 @@ pub fn kino_local_handler(
      */
 }
 
-fn on_step_a(response: i32, state: &mut AppState) {
+fn on_step_a(response: i32, state: &mut ProcessState) {
     kiprintln!("Sender: Received response: {}", response);
     kiprintln!("Sender: State: {}", state.counter);
     state.counter += 1;
     send_async!(
         receiver_address(),
         AsyncRequest::StepB(response),
-        (resp, st: AppState) {
+        (resp, st: ProcessState) {
             on_step_b(resp, st);
         },
     );
 }
 
-fn on_step_b(response: u64, state: &mut AppState) {
+fn on_step_b(response: u64, state: &mut ProcessState) {
     kiprintln!("Sender: Received response: {}", response);
     kiprintln!("Sender: State: {}", state.counter);
     state.counter += 1;
     send_async!(
         receiver_address(),
         AsyncRequest::StepC(response),
-        (resp, st: AppState) {
+        (resp, st: ProcessState) {
             on_step_c(resp, st);
         },
     );
 }
 
-fn on_step_c(response: String, state: &mut AppState) {
+fn on_step_c(response: String, state: &mut ProcessState) {
     kiprintln!("Sender: Received response: {}", response);
     kiprintln!("Sender: State: {}", state.counter);
     state.counter += 1;
