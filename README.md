@@ -184,3 +184,10 @@ sequenceDiagram
 
     Note over RequesterProcess: Final state.counter += 1
 ```
+
+### TODOs
+
+- Test test test and implement more processes.
+- Specify that a UI folder is needed if we initialize a ui, otherwise it fails silently.
+- Some features might have gotten lost since Dorias initial draft. Might have to bring a few back.
+- This will only work within rust for now. However, after using `declare_types!`, we could easily automatically generate a `.wit` file with a macro.
