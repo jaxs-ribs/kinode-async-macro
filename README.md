@@ -88,7 +88,7 @@ This isn't just syntactic sugar, this will enforce that for each request, there 
 The naming scheme enforces these properties:
 
 - For every request variant, there is a only ONE response variant (with the same name).
-- Request enums always have the suffix `Request`, and Response enums always have teh suffix `Response`.
+- Request enums always have the suffix `Request`, and Response enums always have the suffix `Response`.
 
 ### Clean Async Sending
 
