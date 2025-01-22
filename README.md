@@ -1,4 +1,4 @@
-# 🚀 Kinode Processes 2.0 🚀
+# 🔥🚀🤘 Kinode Processes 2.0 🔥🚀🤘
 
 Adapted from Dorias [kinode-app-framework](https://github.com/kinode-dao/app-framework/tree/main).
 
