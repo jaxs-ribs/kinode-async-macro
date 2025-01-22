@@ -146,3 +146,41 @@ fn on_step_c(response: String, state: &mut AppState) {
     state.counter += 1;
 }
 ```
+
+### Example Message Flow (yes, claude did this)
+
+```mermaid
+sequenceDiagram
+    participant TerminalProcess
+    participant RequesterProcess
+    participant ReceiverProcess
+
+    Note over TerminalProcess: m our@async-requester:async-app:template.os '"abc"'
+    TerminalProcess->>RequesterProcess: Terminal Command
+
+    rect rgb(70, 80, 120)
+        Note right of RequesterProcess: Step A
+        RequesterProcess->>+ReceiverProcess: AsyncRequest::StepA("Mashed Potatoes")
+        Note over ReceiverProcess: Sleep 3s
+        ReceiverProcess->>-RequesterProcess: AsyncResponse::StepA(length as i32)
+        Note over RequesterProcess: on_step_a callback
+    end
+
+    rect rgb(70, 100, 70)
+        Note right of RequesterProcess: Step B
+        RequesterProcess->>+ReceiverProcess: AsyncRequest::StepB(response)
+        Note over ReceiverProcess: Sleep 3s
+        ReceiverProcess->>-RequesterProcess: AsyncResponse::StepB(val * 2)
+        Note over RequesterProcess: on_step_b callback
+    end
+
+    rect rgb(120, 70, 70)
+        Note right of RequesterProcess: Step C
+        RequesterProcess->>+ReceiverProcess: AsyncRequest::StepC(response)
+        Note over ReceiverProcess: Sleep 3s
+        ReceiverProcess->>-RequesterProcess: AsyncResponse::StepC("Hello from other side")
+        Note over RequesterProcess: on_step_c callback
+    end
+
+    Note over RequesterProcess: Final state.counter += 1
+```
