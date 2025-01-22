@@ -1846,9 +1846,9 @@ dependencies = [
 
 [[package]]
 name = "kinode_process_lib"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46830129ca3814865519615f1d4e4c1e9894c9df50be38a6c8069572e9cc1530"
+checksum = "832da3db18c1328e3263f41303d34663d8d90217a8c85f778472f59f8397bf85"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -1860,6 +1860,7 @@ dependencies = [
  "http",
  "mime_guess",
  "rand",
+ "regex",
  "rmp-serde",
  "serde",
  "serde_json",

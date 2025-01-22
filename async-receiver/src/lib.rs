@@ -1,5 +1,5 @@
 use kinode_process_lib::http::server::{HttpResponse, HttpServer};
-use kinode_process_lib::{kiprintln, Address, Message};
+use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
 use kinode_process_lib::http::StatusCode;

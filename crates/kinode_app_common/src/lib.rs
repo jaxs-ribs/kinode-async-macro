@@ -9,7 +9,7 @@ use kinode_process_lib::logging::info;
 use once_cell::sync::Lazy;
 
 use kinode_process_lib::{
-    await_message, get_typed_state, homepage, http, kiprintln, set_state, Address, LazyLoadBlob,
+    await_message, get_typed_state, homepage, http, kiprintln, set_state, LazyLoadBlob,
     Message, SendError, SendErrorKind,
 };
 
@@ -155,7 +155,7 @@ pub fn app<S, T1, T2, T3>(
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
     handle_send_error: impl Fn(&mut S, &mut http::server::HttpServer, SendError),
-) -> impl Fn(Address)
+) -> impl Fn()
 where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
     T1: serde::Serialize + serde::de::DeserializeOwned,
@@ -166,13 +166,12 @@ where
         homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
     }
 
-    move |our: Address| {
-        init_logging(&our, Level::DEBUG, Level::INFO, None, Some((0, 0, 1, 1))).unwrap();
+    move || {
+        init_logging(Level::DEBUG, Level::INFO, None, Some((0, 0, 1, 1)), None).unwrap();
         info!("starting app");
         let mut server = http::server::HttpServer::new(5);
 
         if let Err(e) = server.serve_ui(
-            &our,
             "ui",
             vec!["/"],
             http::server::HttpBindingConfig::default(),
@@ -363,7 +362,7 @@ where
                                 Ok(real_s_box) => {
                                     let s = *real_s_box;
                                     state_opt = Some(s);
-                                    is_local_msg = message.is_local(&our);
+                                    is_local_msg = message.is_local();
                                     from_http_server =
                                         message.source().process == "http-server:distro:sys";
                                 }
@@ -513,8 +512,7 @@ macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident) => {
         struct Component;
         impl Guest for Component {
-            fn init(our: String) {
-                let our: Address = our.parse().unwrap();
+            fn init(_our: String) {  // Keep the parameter but ignore it with _
                 // we pass the default T3=() for the local request, for example
                 let init = $crate::app(
                     $app_name,
@@ -525,7 +523,7 @@ macro_rules! erect {
                     $f2,
                     |_, _, _| {},
                 );
-                init(our);
+                init();  // Remove the our parameter here
             }
         }
         export!(Component);
@@ -533,8 +531,7 @@ macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident, $f3:ident) => {
         struct Component;
         impl Guest for Component {
-            fn init(our: String) {
-                let our: Address = our.parse().unwrap();
+            fn init(_our: String) {  // Keep the parameter but ignore it with _
                 let init = $crate::app(
                     $app_name,
                     $app_icon,
@@ -544,7 +541,7 @@ macro_rules! erect {
                     $f3,
                     |_, _, _| {},
                 );
-                init(our);
+                init();  // Remove the our parameter here
             }
         }
         export!(Component);
@@ -552,10 +549,9 @@ macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident, $f3:ident, $f4:ident) => {
         struct Component;
         impl Guest for Component {
-            fn init(our: String) {
-                let our: Address = our.parse().unwrap();
+            fn init(_our: String) {  // Keep the parameter but ignore it with _
                 let init = $crate::app($app_name, $app_icon, $app_widget, $f1, $f2, $f3, $f4);
-                init(our);
+                init();  // Remove the our parameter here
             }
         }
         export!(Component);
