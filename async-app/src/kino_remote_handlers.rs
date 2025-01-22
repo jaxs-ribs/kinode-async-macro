@@ -1,6 +1,6 @@
 use crate::*;
 
-pub fn my_remote_request(
+pub fn kino_remote_handler(
     _message: &Message,
     _state: &mut AppState,
     _server: &mut HttpServer,

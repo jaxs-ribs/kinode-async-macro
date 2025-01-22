@@ -31,9 +31,9 @@ erect!(
     "My Example App",
     None,
     None,
-    my_api_handler,
-    my_local_request,
-    my_remote_request
+    http_handler,
+    kino_local_handler,
+    kino_remote_handler
 );
 
 // m our@async-app:async-app:template.os '"abc"'
