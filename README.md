@@ -106,3 +106,43 @@ send_async!(
 
 The compiler will _know_ what the value of resp is (i32 in this case).
 How cool is that???
+
+You can then chain calls, for example like this:
+
+```rust
+fn on_step_a(response: i32, state: &mut AppState) {
+    kiprintln!("Sender: Received response: {}", response);
+    kiprintln!("Sender: State: {}", state.counter);
+    state.counter += 1;
+    send_async!(
+        receiver_address(),
+        AsyncRequest::StepB(response),
+        (resp, st: AppState) {
+            on_step_b(resp, st);
+        },
+    );
+}
+```
+
+And then:
+
+```rust
+fn on_step_b(response: u64, state: &mut AppState) {
+    kiprintln!("Sender: Received response: {}", response);
+    kiprintln!("Sender: State: {}", state.counter);
+    state.counter += 1;
+    send_async!(
+        receiver_address(),
+        AsyncRequest::StepC(response),
+        (resp, st: AppState) {
+            on_step_c(resp, st);
+        },
+    );
+}
+
+fn on_step_c(response: String, state: &mut AppState) {
+    kiprintln!("Sender: Received response: {}", response);
+    kiprintln!("Sender: State: {}", state.counter);
+    state.counter += 1;
+}
+```
