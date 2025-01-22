@@ -574,7 +574,7 @@ macro_rules! __declare_types_internal {
     ) => {
         $crate::paste::paste! {
             #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
-            pub enum Request {
+            pub enum Req {
                 $(
                     $outer([<$outer Request>]),
                 )*

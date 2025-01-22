@@ -1,5 +1,7 @@
 use crate::*;
 
+use kinode_app_common::send;
+use kinode_process_lib::Request;
 /// This will get triggered with a terminal request 
 /// For example, if you run `m our@async-requester:async-app:template.os '"abc"'`
 /// Then we will message the async receiver who will sleep 3s then answer.
@@ -10,6 +12,16 @@ pub fn kino_local_handler(
     _request: String,
 ) {
     kiprintln!("Sending message to receiver");
+    // send!(
+    //     receiver_address(),
+    //     AsyncRequest::StepA("Mashed Potatoes".to_string()),
+    //     (resp, st: AppState) {
+    //         kiprintln!("LALALALA");
+    //     }
+    // );
+    // Request::to(receiver_address())
+    //     .body(AsyncRequest::StepA("Mashed Potatoes".to_string()))
+    //     .send();
     send_async!(
         receiver_address(),
         AsyncRequest::StepA("Mashed Potatoes".to_string()),
