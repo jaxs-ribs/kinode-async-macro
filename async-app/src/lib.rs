@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use kinode_process_lib::http::StatusCode;
 use process_macros::SerdeJsonInto;
-use kinode_app_common::erect;
+use kinode_app_common::{declare_types, erect};
 use kinode_app_common::State;
 
 use proc_macro_send::send_async;
@@ -25,6 +25,18 @@ wit_bindgen::generate!({
     generate_unused_types: true,
     additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
 });
+
+declare_types! {
+    Subtext {
+        StepA String => i32
+        StepB i32 => u64
+        StepC u64 => String
+    },
+    Commodore {
+        Power SomeStruct => SomeOtherStruct
+        Excitement i32 => Result<String, String>
+    },
+}
 
 fn my_api_handler(_state: &mut AppState, _payload: String) -> (HttpResponse, Vec<u8>) {
     (HttpResponse::new(StatusCode::OK), "".as_bytes().to_vec())

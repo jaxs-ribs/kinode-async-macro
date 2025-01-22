@@ -30,3 +30,13 @@ impl State for AppState {
         Self { counter: 0 }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+pub struct SomeStruct {
+    pub counter: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+pub struct SomeOtherStruct {
+    pub message: String,
+}

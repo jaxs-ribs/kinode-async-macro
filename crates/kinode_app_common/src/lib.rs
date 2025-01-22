@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Mutex;
 
+
 use once_cell::sync::Lazy;
 
 use kinode_process_lib::{
@@ -159,7 +160,9 @@ where
     T2: serde::Serialize + serde::de::DeserializeOwned,
     T3: serde::Serialize + serde::de::DeserializeOwned,
 {
-    homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
+    if app_icon.is_some() && app_widget.is_some() {
+        homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
+    }
 
     move |our: Address| {
         kiprintln!("Starting app");
@@ -555,3 +558,53 @@ macro_rules! erect {
         export!(Component);
     };
 }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __declare_types_internal {
+    (
+        $(
+            $outer:ident {
+                $(
+                    $variant:ident $req_ty:ty => $res_ty:ty
+                )*
+            }
+        ),*
+        $(,)?
+    ) => {
+        $crate::paste::paste! {
+            #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+            pub enum Request {
+                $(
+                    $outer([<$outer Request>]),
+                )*
+            }
+
+            $(
+                #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+                pub enum [<$outer Request>] {
+                    $(
+                        $variant($req_ty),
+                    )*
+                }
+
+                #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+                pub enum [<$outer Response>] {
+                    $(
+                        $variant($res_ty),
+                    )*
+                }
+            )*
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! declare_types {
+    ($($tt:tt)*) => {
+        $crate::__declare_types_internal! { $($tt)* }
+    };
+}
+
+// Re-export paste for use in our macros
+pub use paste;
