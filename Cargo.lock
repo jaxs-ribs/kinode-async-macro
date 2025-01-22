@@ -690,7 +690,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-app"
+name = "async-requester"
 version = "0.1.0"
 dependencies = [
  "anyhow",
