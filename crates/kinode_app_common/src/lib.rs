@@ -2,7 +2,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Mutex;
-
+use kinode_process_lib::logging::init_logging;
+use kinode_process_lib::logging::Level;
+use kinode_process_lib::logging::info;
 
 use once_cell::sync::Lazy;
 
@@ -165,7 +167,8 @@ where
     }
 
     move |our: Address| {
-        kiprintln!("Starting app");
+        init_logging(&our, Level::DEBUG, Level::INFO, None, Some((0, 0, 1, 1))).unwrap();
+        info!("starting app");
         let mut server = http::server::HttpServer::new(5);
 
         if let Err(e) = server.serve_ui(
