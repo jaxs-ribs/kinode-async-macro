@@ -1,7 +1,7 @@
 use crate::*;
 
 /// This will get triggered with a terminal request 
-/// For example, if you run `m our@async-app:async-app:template.os '"abc"'`
+/// For example, if you run `m our@async-requester:async-app:template.os '"abc"'`
 /// Then we will message the async receiver who will sleep 3s then answer.
 pub fn kino_local_handler(
     _message: &Message,
@@ -9,6 +9,7 @@ pub fn kino_local_handler(
     _server: &mut HttpServer,
     _request: String,
 ) {
+    kiprintln!("Sending message to receiver");
     send_async!(
         receiver_address(),
         AsyncRequest::StepA("Mashed Potatoes".to_string()),

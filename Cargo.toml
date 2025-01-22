@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["async-requester", "lib/shared"]
+members = ["async-requester", "async-receiver", "lib/shared"]
 
 [profile.release]
 panic = "abort"

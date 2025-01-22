@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 use kinode_process_lib::Address;
 
 pub fn receiver_address() -> Address {
-    ("our", "async-receiver", "async-callbacks", "template.os").into()
+    ("our", "async-receiver", "async-app", "uncentered.os").into()
+}
+
+pub fn requester_address() -> Address {
+    ("our", "async-requester", "async-app", "uncentered.os").into()
 }
 
 declare_types! {

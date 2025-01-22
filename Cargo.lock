@@ -690,6 +690,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-receiver"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "kinode_app_common",
+ "kinode_process_lib",
+ "once_cell",
+ "proc_macro_send",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "shared",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "async-requester"
 version = "0.1.0"
 dependencies = [

@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use kinode_process_lib::http::StatusCode;
 use kinode_app_common::erect;
+use kinode_process_lib::Response;
 use kinode_app_common::State;
-use shared::receiver_address;
-
-use proc_macro_send::send_async;
 
 mod structs;
 mod http_handlers;
@@ -28,7 +26,7 @@ wit_bindgen::generate!({
 });
 
 erect!(
-    "Async Requester",
+    "Async Receiver",
     None,
     None,
     http_handler,
@@ -36,4 +34,3 @@ erect!(
     kino_remote_handler
 );
 
-// m our@async-requester:async-app:template.os '"abc"'

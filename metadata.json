@@ -5,7 +5,7 @@
     "properties": {
         "package_name": "async-app",
         "current_version": "0.1.0",
-        "publisher": "template.os",
+        "publisher": "uncentered.os",
         "mirrors": [],
         "code_hashes": {
             "0.1.0": ""

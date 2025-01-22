@@ -185,9 +185,9 @@ where
             .bind_ws_path("/updates", http::server::WsBindingConfig::default())
             .expect("failed to bind WS path");
 
-        // 1) Load or init the typed state - now with rmp-serde and panic on failure
+        // 1) Load or init the typed state - now with graceful fallback
         let existing = get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes))
-            .expect("Failed to deserialize state");
+            .unwrap_or_else(|| S::new());
 
         // 2) Put the user's S into the global as Box<dyn Any>
         {
@@ -414,7 +414,7 @@ fn http_request<S, T1>(
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let http_request = rmp_serde::from_slice::<http::server::HttpServerRequest>(message.body())
+    let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
         .expect("failed to parse HTTP request");
 
     server.handle_request(
@@ -424,7 +424,7 @@ fn http_request<S, T1>(
             let Some(blob) = message.blob() else {
                 return (response.set_status(400), None);
             };
-            let Ok(call) = rmp_serde::from_slice::<T1>(blob.bytes()) else {
+            let Ok(call) = serde_json::from_slice::<T1>(blob.bytes()) else {
                 return (response.set_status(400), None);
             };
 
@@ -449,7 +449,7 @@ fn local_request<S, T>(
     S: std::fmt::Debug,
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let Ok(request) = rmp_serde::from_slice::<T>(message.body()) else {
+    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
         if message.body() == b"debug" {
             kiprintln!("state:\n{:#?}", state);
         }
@@ -466,7 +466,7 @@ fn remote_request<S, T>(
 ) where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let Ok(request) = rmp_serde::from_slice::<T>(message.body()) else {
+    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
         return;
     };
     handle_remote_request(message, state, server, request);
