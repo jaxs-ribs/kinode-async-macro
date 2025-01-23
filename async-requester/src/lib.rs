@@ -3,6 +3,9 @@ use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
 use kinode_process_lib::http::StatusCode;
+use kinode_process_lib::http::server::WsMessageType;
+use kinode_process_lib::LazyLoadBlob;
+
 use kinode_app_common::erect;
 use kinode_app_common::State;
 use shared::receiver_address;
@@ -33,7 +36,8 @@ erect!(
     None,
     http_handler,
     kino_local_handler,
-    kino_remote_handler
+    kino_remote_handler,
+    ws_handler
 );
 
 // m our@async-requester:async-app:template.os '"abc"'

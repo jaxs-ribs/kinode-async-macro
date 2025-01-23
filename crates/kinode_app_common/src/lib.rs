@@ -2,6 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Mutex;
+use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::logging::init_logging;
 use kinode_process_lib::logging::Level;
 use kinode_process_lib::logging::info;
@@ -154,7 +155,7 @@ pub fn app<S, T1, T2, T3>(
     handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
-    handle_send_error: impl Fn(&mut S, &mut http::server::HttpServer, SendError),
+    handle_ws: impl Fn(&mut S, u32, WsMessageType, LazyLoadBlob),
 ) -> impl Fn()
 where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
@@ -213,7 +214,6 @@ where
                         .map(|bytes| String::from_utf8_lossy(bytes).to_string());
 
                     let mut maybe_state: Option<S> = None;
-                    // This must match `Option<Box<dyn FnOnce(&mut dyn Any) -> ... + Send>>`
                     let mut maybe_timeout_callback: Option<
                         Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>,
                     > = None;
@@ -230,23 +230,14 @@ where
                                     maybe_state = Some(s);
                                 }
                             } else {
-                                // Put back the original box since we know it's not our type
                                 app_state.user_state = original_box;
                             }
 
                             // If there's a correlation_id, see if there's a matching callback
                             if let Some(cid) = &correlation_id {
                                 if let Some(pending) = app_state.pending_callbacks.remove(cid) {
-                                    // Check if the error was a Timeout. Because we can't do ==,
-                                    // we match on send_error.kind directly.
-                                    match send_error.kind {
-                                        SendErrorKind::Timeout => {
-                                            // Use on_timeout if present
-                                            maybe_timeout_callback = pending.on_timeout;
-                                        }
-                                        // For any other kind, we won't auto-run the success or timeout.
-                                        // Just let handle_send_error handle it.
-                                        _ => {}
+                                    if matches!(send_error.kind, SendErrorKind::Timeout) {
+                                        maybe_timeout_callback = pending.on_timeout;
                                     }
                                 }
                             }
@@ -259,9 +250,6 @@ where
                             if let Err(e) = cb(state as &mut dyn Any) {
                                 kiprintln!("Error in on_timeout callback: {e}");
                             }
-                        } else {
-                            // Fall back to normal handle_send_error
-                            handle_send_error(state, &mut server, send_error);
                         }
                     }
 
@@ -378,7 +366,7 @@ where
                     if let Some(ref mut state) = state_opt {
                         if is_local_msg {
                             if from_http_server {
-                                http_request(&message, state, &mut server, &handle_api_call);
+                                http_request(&message, state, &mut server, &handle_api_call, &handle_ws);
                             } else {
                                 local_request(&message, state, &mut server, &handle_local_request);
                             }
@@ -407,21 +395,28 @@ where
     }
 }
 
-// Helper functions
 fn http_request<S, T1>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_api_call: &impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    handle_ws: impl Fn(&mut S, u32, WsMessageType, LazyLoadBlob),
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
-        .expect("failed to parse HTTP request");
+    let http_request =
+        serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
+            .expect("failed to parse HTTP request");
+
+    // Convert `&mut S` to an *mut S, which is unsafe but can be captured freely by closures.
+    let state_ptr: *mut S = state;
 
     server.handle_request(
         http_request,
-        |_incoming| {
+        move |_incoming| {
+            // Recreate the &mut S from the raw pointer.
+            let state_ref: &mut S = unsafe { &mut *state_ptr };
+            
             let response = http::server::HttpResponse::new(200 as u16);
             let Some(blob) = message.blob() else {
                 return (response.set_status(400), None);
@@ -430,18 +425,22 @@ fn http_request<S, T1>(
                 return (response.set_status(400), None);
             };
 
-            let (response, bytes) = handle_api_call(state, call);
+            // Now call the user function with a real &mut S
+            let (response, bytes) = handle_api_call(state_ref, call);
+
             (
                 response,
                 Some(LazyLoadBlob::new(Some("application/json"), bytes)),
             )
         },
-        |_, _, _| {
-            // skip ws
-            // TODO: Zena: Entrypoint
+        move |channel_id, msg_type, blob| {
+            // Same trick for the WS closure
+            let state_ref: &mut S = unsafe { &mut *state_ptr };
+            handle_ws(state_ref, channel_id, msg_type, blob);
         },
     );
 }
+
 
 fn local_request<S, T>(
     message: &Message,
@@ -513,8 +512,7 @@ macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident) => {
         struct Component;
         impl Guest for Component {
-            fn init(_our: String) {  // Keep the parameter but ignore it with _
-                // we pass the default T3=() for the local request, for example
+            fn init(_our: String) {
                 let init = $crate::app(
                     $app_name,
                     $app_icon,
@@ -522,9 +520,9 @@ macro_rules! erect {
                     $f1,
                     |_, _, _, _: ()| {},
                     $f2,
-                    |_, _, _| {},
+                    |_, _, _, _| {}, // no-op ws handler
                 );
-                init();  // Remove the our parameter here
+                init();
             }
         }
         export!(Component);
@@ -532,17 +530,17 @@ macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident, $f3:ident) => {
         struct Component;
         impl Guest for Component {
-            fn init(_our: String) {  // Keep the parameter but ignore it with _
+            fn init(_our: String) {
                 let init = $crate::app(
                     $app_name,
                     $app_icon,
                     $app_widget,
                     $f1,
                     $f2,
+                    |_, _, _, _: ()| {},
                     $f3,
-                    |_, _, _| {},
                 );
-                init();  // Remove the our parameter here
+                init();
             }
         }
         export!(Component);
@@ -550,9 +548,9 @@ macro_rules! erect {
     ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident, $f3:ident, $f4:ident) => {
         struct Component;
         impl Guest for Component {
-            fn init(_our: String) {  // Keep the parameter but ignore it with _
+            fn init(_our: String) {
                 let init = $crate::app($app_name, $app_icon, $app_widget, $f1, $f2, $f3, $f4);
-                init();  // Remove the our parameter here
+                init();
             }
         }
         export!(Component);

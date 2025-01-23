@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use kinode_process_lib::http::StatusCode;
 use kinode_app_common::erect;
 use kinode_process_lib::Response;
+use kinode_process_lib::http::server::WsMessageType;
 use kinode_app_common::State;
+use kinode_process_lib::LazyLoadBlob;
 
 mod structs;
 mod http_handlers;
@@ -31,6 +33,7 @@ erect!(
     None,
     http_handler,
     kino_local_handler,
-    kino_remote_handler
+    kino_remote_handler,
+    ws_handler
 );
 
