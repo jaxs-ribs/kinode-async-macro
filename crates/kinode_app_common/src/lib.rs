@@ -1,17 +1,17 @@
+use kinode_process_lib::http::server::WsMessageType;
+use kinode_process_lib::logging::info;
+use kinode_process_lib::logging::init_logging;
+use kinode_process_lib::logging::Level;
 use std::any::Any;
 use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Mutex;
-use kinode_process_lib::http::server::WsMessageType;
-use kinode_process_lib::logging::init_logging;
-use kinode_process_lib::logging::Level;
-use kinode_process_lib::logging::info;
 
 use once_cell::sync::Lazy;
 
 use kinode_process_lib::{
-    await_message, get_typed_state, homepage, http, kiprintln, set_state, LazyLoadBlob,
-    Message, SendError, SendErrorKind,
+    await_message, get_typed_state, homepage, http, kiprintln, set_state, LazyLoadBlob, Message,
+    SendError, SendErrorKind,
 };
 
 /// We store the user's state as `dyn Any + Send`, plus the callback map.
@@ -155,7 +155,7 @@ pub fn app<S, T1, T2, T3>(
     handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
-    handle_ws: impl Fn(&mut S, u32, WsMessageType, LazyLoadBlob),
+    handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
 ) -> impl Fn()
 where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
@@ -172,11 +172,8 @@ where
         info!("starting app");
         let mut server = http::server::HttpServer::new(5);
 
-        if let Err(e) = server.serve_ui(
-            "ui",
-            vec!["/"],
-            http::server::HttpBindingConfig::default(),
-        ) {
+        if let Err(e) = server.serve_ui("ui", vec!["/"], http::server::HttpBindingConfig::default())
+        {
             panic!("failed to serve UI: {e}");
         }
 
@@ -189,8 +186,8 @@ where
             .expect("failed to bind WS path");
 
         // 1) Load or init the typed state - now with graceful fallback
-        let existing = get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes))
-            .unwrap_or_else(|| S::new());
+        let existing =
+            get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes)).unwrap_or_else(|| S::new());
 
         // 2) Put the user's S into the global as Box<dyn Any>
         {
@@ -366,7 +363,13 @@ where
                     if let Some(ref mut state) = state_opt {
                         if is_local_msg {
                             if from_http_server {
-                                http_request(&message, state, &mut server, &handle_api_call, &handle_ws);
+                                http_request(
+                                    &message,
+                                    state,
+                                    &mut server,
+                                    &handle_api_call,
+                                    &handle_ws,
+                                );
                             } else {
                                 local_request(&message, state, &mut server, &handle_local_request);
                             }
@@ -400,23 +403,21 @@ fn http_request<S, T1>(
     state: &mut S,
     server: &mut http::server::HttpServer,
     handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
-    handle_ws: impl Fn(&mut S, u32, WsMessageType, LazyLoadBlob),
+    handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let http_request =
-        serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
-            .expect("failed to parse HTTP request");
+    let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
+        .expect("failed to parse HTTP request");
 
-    // Convert `&mut S` to an *mut S, which is unsafe but can be captured freely by closures.
     let state_ptr: *mut S = state;
+    let server_ptr: *mut http::server::HttpServer = server;
 
     server.handle_request(
         http_request,
         move |_incoming| {
-            // Recreate the &mut S from the raw pointer.
             let state_ref: &mut S = unsafe { &mut *state_ptr };
-            
+
             let response = http::server::HttpResponse::new(200 as u16);
             let Some(blob) = message.blob() else {
                 return (response.set_status(400), None);
@@ -425,7 +426,6 @@ fn http_request<S, T1>(
                 return (response.set_status(400), None);
             };
 
-            // Now call the user function with a real &mut S
             let (response, bytes) = handle_api_call(state_ref, call);
 
             (
@@ -434,9 +434,10 @@ fn http_request<S, T1>(
             )
         },
         move |channel_id, msg_type, blob| {
-            // Same trick for the WS closure
             let state_ref: &mut S = unsafe { &mut *state_ptr };
-            handle_ws(state_ref, channel_id, msg_type, blob);
+            let server_ref: &mut http::server::HttpServer = unsafe { &mut *server_ptr };
+
+            handle_ws(state_ref, server_ref, channel_id, msg_type, blob);
         },
     );
 }
@@ -478,7 +479,7 @@ fn remote_request<S, T>(
 fn pretty_print_send_error(error: &SendError) {
     let kind = &error.kind;
     let target = &error.target;
-    
+
     // Try to decode body as UTF-8 string, fall back to showing as bytes
     let body = String::from_utf8(error.message.body().to_vec())
         .map(|s| format!("\"{}\"", s))
