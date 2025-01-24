@@ -12,5 +12,4 @@ pub fn ws_handler(
     _blob: LazyLoadBlob,
 ) {
     // no-op
-    
 }

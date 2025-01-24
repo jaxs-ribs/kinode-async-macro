@@ -1,7 +1,7 @@
 use kinode_app_common::*;
+use kinode_process_lib::Address;
 use process_macros::SerdeJsonInto;
 use serde::{Deserialize, Serialize};
-use kinode_process_lib::Address;
 
 pub fn receiver_address() -> Address {
     ("our", "async-receiver", "async-app", "uncentered.os").into()

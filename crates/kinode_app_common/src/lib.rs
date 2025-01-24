@@ -442,7 +442,6 @@ fn http_request<S, T1>(
     );
 }
 
-
 fn local_request<S, T>(
     message: &Message,
     state: &mut S,

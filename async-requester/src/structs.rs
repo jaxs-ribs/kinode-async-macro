@@ -10,4 +10,3 @@ impl State for ProcessState {
         Self { counter: 0 }
     }
 }
-

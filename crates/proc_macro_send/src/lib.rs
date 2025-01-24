@@ -1,11 +1,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse::Parse, parse::ParseStream,
-    parse_macro_input,
-    Token, Block, Expr, Ident, Type, Result,
-    ExprCall, ExprPath,
-    Expr::Call as ExprCallNode, Expr::Path as ExprPathNode
+    parse::Parse, parse::ParseStream, parse_macro_input, Block, Expr, Expr::Call as ExprCallNode,
+    Expr::Path as ExprPathNode, ExprCall, ExprPath, Ident, Result, Token, Type,
 };
 
 // The main macro entry point
@@ -109,12 +106,15 @@ impl SendAsyncInvocation {
         };
 
         // 4) default timeout is 30
-        let timeout_expr = self.timeout.clone().unwrap_or_else(|| syn::parse_str("30").unwrap());
+        let timeout_expr = self
+            .timeout
+            .clone()
+            .unwrap_or_else(|| syn::parse_str("30").unwrap());
 
         // 5) optional on_timeout code
         let on_timeout_code = if let Some(ref block) = self.on_timeout_block {
             let st_ident = &self.st_ident;
-            let st_type  = &self.st_type;
+            let st_type = &self.st_type;
             quote! {
                 Some(Box::new(move |any_state: &mut dyn std::any::Any| {
                     let #st_ident = any_state
@@ -128,70 +128,69 @@ impl SendAsyncInvocation {
             quote! { None }
         };
 
-        let dest_expr     = &self.destination;
-        let request_expr  = &self.request_expr;
-        let resp_ident    = &self.resp_ident;
-        let st_ident      = &self.st_ident;
-        let st_type       = &self.st_type;
+        let dest_expr = &self.destination;
+        let request_expr = &self.request_expr;
+        let resp_ident = &self.resp_ident;
+        let st_ident = &self.st_ident;
+        let st_type = &self.st_type;
         let callback_body = &self.callback_block;
 
         // 6) produce final expansion
         quote! {
             {
-                let correlation_id = ::uuid::Uuid::new_v4().to_string();
-
-                // Insert callback into your global
-                {
-                    // e.g. if your global is in kinode_app_common:
-                    let mut guard = kinode_app_common::GLOBAL_APP_STATE.lock().unwrap();
-                    if let Some(app_state) = guard.as_mut() {
-                        app_state.pending_callbacks.insert(
-                            correlation_id.clone(),
-                            kinode_app_common::PendingCallback {
-                                on_success: Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
-                                    // parse entire <response_path> enum
-                                    let parsed = ::serde_json::from_slice::<#response_path>(resp_bytes)
-                                        .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))?;
-
-                                    let #resp_ident = match parsed {
-                                        #success_arm,
-                                        other => {
-                                            return Err(anyhow::anyhow!(
-                                                "Got the wrong variant (expected {}) => got: {:?}", 
-                                                stringify!(#variant_ident),
-                                                other
-                                            ));
-                                        }
-                                    };
-
-                                    let #st_ident = any_state
-                                        .downcast_mut::<#st_type>()
-                                        .ok_or_else(|| anyhow::anyhow!("Downcast user state failed!"))?;
-
-                                    #callback_body
-                                    Ok(())
-                                }),
-                                on_timeout: #on_timeout_code,
-                            }
-                        );
-                    }
-                }
 
                 // Serialize the request
-                let body_vec = match ::serde_json::to_vec(&#request_expr) {
-                    Ok(b) => b,
+                match ::serde_json::to_vec(&#request_expr) {
+                    Ok(b) => {
+                        let correlation_id = ::uuid::Uuid::new_v4().to_string();
+
+                        // Insert callback into your global
+                        {
+                            // e.g. if your global is in kinode_app_common:
+                            let mut guard = kinode_app_common::GLOBAL_APP_STATE.lock().unwrap();
+                            if let Some(app_state) = guard.as_mut() {
+                                app_state.pending_callbacks.insert(
+                                    correlation_id.clone(),
+                                    kinode_app_common::PendingCallback {
+                                        on_success: Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
+                                            // parse entire <response_path> enum
+                                            let parsed = ::serde_json::from_slice::<#response_path>(resp_bytes)
+                                                .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))?;
+
+                                            let #resp_ident = match parsed {
+                                                #success_arm,
+                                                other => {
+                                                    return Err(anyhow::anyhow!(
+                                                        "Got the wrong variant (expected {}) => got: {:?}",
+                                                        stringify!(#variant_ident),
+                                                        other
+                                                    ));
+                                                }
+                                            };
+
+                                            let #st_ident = any_state
+                                                .downcast_mut::<#st_type>()
+                                                .ok_or_else(|| anyhow::anyhow!("Downcast user state failed!"))?;
+
+                                            #callback_body
+                                            Ok(())
+                                        }),
+                                        on_timeout: #on_timeout_code,
+                                    }
+                                );
+                            }
+                        }
+                        // Actually send
+                        let _ = ::kinode_process_lib::Request::to(#dest_expr)
+                            .context(correlation_id.as_bytes())
+                            .body(b)
+                            .expects_response(#timeout_expr)
+                            .send();
+                    },
                     Err(e) => {
                         ::kinode_process_lib::kiprintln!("Error serializing request: {}", e);
-                        return;
                     }
-                };
-
-                // Actually send
-                let _ = ::kinode_process_lib::Request::to(#dest_expr)
-                    .context(correlation_id.as_bytes())
-                    .body(body_vec)
-                    .expects_response(#timeout_expr)
-                    .send();
+                }
             }
         }
     }
@@ -218,10 +217,10 @@ fn build_response_path(expr: &Expr) -> proc_macro2::TokenStream {
                 // can't rewrite if there's no last enum seg
                 return quote! { UNKNOWN_RESPONSE };
             }
-            
+
             // Get the enum name segment (second to last) and the variant (last)
             let enum_seg = &segments[segments.len() - 2];
-            
+
             // Create the new response enum name
             let old_ident_str = enum_seg.ident.to_string();
             let new_ident_str = if let Some(base) = old_ident_str.strip_suffix("Request") {
@@ -233,12 +232,12 @@ fn build_response_path(expr: &Expr) -> proc_macro2::TokenStream {
 
             // Reconstruct the path with the new response enum name
             let mut new_segments = syn::punctuated::Punctuated::new();
-            
+
             // Add all segments except the last two
-            for i in 0..segments.len()-2 {
+            for i in 0..segments.len() - 2 {
                 new_segments.push(segments[i].clone());
             }
-            
+
             // Add our new response enum segment
             let mut replaced_seg = enum_seg.clone();
             replaced_seg.ident = new_ident;

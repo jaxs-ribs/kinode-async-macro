@@ -2,8 +2,8 @@ use kinode_process_lib::http::server::{HttpResponse, HttpServer};
 use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
-use kinode_process_lib::http::StatusCode;
 use kinode_process_lib::http::server::WsMessageType;
+use kinode_process_lib::http::StatusCode;
 use kinode_process_lib::LazyLoadBlob;
 
 use kinode_app_common::erect;
@@ -12,16 +12,16 @@ use shared::receiver_address;
 
 use proc_macro_send::send_async;
 
-mod structs;
 mod http_handlers;
 mod kino_local_handlers;
 mod kino_remote_handlers;
+mod structs;
 
-use structs::*;
-use shared::*;
 use http_handlers::*;
 use kino_local_handlers::*;
 use kino_remote_handlers::*;
+use shared::*;
+use structs::*;
 
 wit_bindgen::generate!({
     path: "target/wit",

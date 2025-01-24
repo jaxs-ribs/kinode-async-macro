@@ -10,4 +10,3 @@ impl State for AppState {
         Self { counter: 0 }
     }
 }
-

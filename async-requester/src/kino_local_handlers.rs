@@ -1,6 +1,6 @@
 use crate::*;
 
-/// This will get triggered with a terminal request 
+/// This will get triggered with a terminal request
 /// For example, if you run `m our@async-requester:async-app:template.os '"abc"'`
 /// Then we will message the async receiver who will sleep 3s then answer.
 pub fn kino_local_handler(
@@ -21,7 +21,7 @@ pub fn kino_local_handler(
 
     /*
     Note, you can also send a timeout, and an on_timeout handler.
-    
+
     send_async!(
         receiver_address(),
         AsyncRequest::StepB("Yes hello".to_string()),
@@ -45,12 +45,12 @@ fn on_step_a(response: i32, state: &mut ProcessState) {
         receiver_address(),
         AsyncRequest::StepB(response),
         (resp, st: ProcessState) {
-            on_step_b(resp, st);
+            let _ = on_step_b(resp, st);
         },
     );
 }
 
-fn on_step_b(response: u64, state: &mut ProcessState) {
+fn on_step_b(response: u64, state: &mut ProcessState) -> anyhow::Result<()> {
     kiprintln!("Sender: Received response: {}", response);
     kiprintln!("Sender: State: {}", state.counter);
     state.counter += 1;
@@ -61,6 +61,7 @@ fn on_step_b(response: u64, state: &mut ProcessState) {
             on_step_c(resp, st);
         },
     );
+    Ok(())
 }
 
 fn on_step_c(response: String, state: &mut ProcessState) {
