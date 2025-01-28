@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::http::StatusCode;
+use kinode_process_lib::http::server::HttpBindingConfig;
+use kinode_process_lib::http::server::WsBindingConfig;
 use kinode_process_lib::LazyLoadBlob;
 
 use kinode_app_common::erect;
@@ -39,6 +41,9 @@ erect!(
     "Async Requester",
     None,
     None,
+    HttpBindingConfig::default(),
+    HttpBindingConfig::default(),
+    WsBindingConfig::default(),
     http_handler,
     kino_local_handler,
     kino_remote_handler,

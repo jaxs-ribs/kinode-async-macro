@@ -14,7 +14,7 @@ use kinode_process_lib::{
     SendError, SendErrorKind,
 };
 
-/// We store the user's state as `dyn Any + Send`, plus the callback map.
+/// The application state containing the callback map plus the user state. This is the actual state.
 pub struct AppState {
     pub user_state: Box<dyn Any + Send>,
     pub pending_callbacks: HashMap<String, PendingCallback>,
@@ -34,25 +34,21 @@ impl AppState {
     }
 }
 
-/// A single global that holds the entire application state
 pub static GLOBAL_APP_STATE: Lazy<Mutex<Option<AppState>>> = Lazy::new(|| Mutex::new(None));
 
 #[macro_export]
 macro_rules! timer {
     ($duration:expr, ($st:ident : $user_state_ty:ty) $callback_block:block) => {{
-        use uuid::Uuid; // Make sure `uuid` crate is in scope
+        use uuid::Uuid;
 
-        // 1) Generate a correlation_id
         let correlation_id = Uuid::new_v4().to_string();
 
-        // 2) Insert the callback into the global callback map
         {
             let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
             if let Some(app_state_any) = guard.as_mut() {
                 app_state_any.pending_callbacks.insert(
                     correlation_id.clone(),
                     $crate::PendingCallback {
-                        // This callback runs when the timer response arrives
                         on_success: Box::new(move |_resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
                             let $st = any_state
                                 .downcast_mut::<$user_state_ty>()
@@ -60,127 +56,17 @@ macro_rules! timer {
                             $callback_block
                             Ok(())
                         }),
-                        // No timeout callback
                         on_timeout: None,
                     },
                 );
             }
         }
 
-        // 3) Construct and send the request
         let total_timeout_seconds = ($duration / 1000) + 1;
-        let mut request = kinode_process_lib::Request::to(("our", "timer", "distro", "sys"))
+        let _ = kinode_process_lib::Request::to(("our", "timer", "distro", "sys"))
             .body(TimerAction::SetTimer($duration))
-            .expects_response(total_timeout_seconds);
-
-        // 4) Attach correlation_id so the framework can match the response
-        request = request.context(correlation_id.as_bytes());
-
-        // 5) Fire it off
-        request.send().unwrap();
-    }};
-}
-
-#[macro_export]
-macro_rules! send {
-    // ---------------------------------------------------------------------
-    // 1) Original version (no explicit timeout, no on_timeout)
-    // ---------------------------------------------------------------------
-    (
-        $destination:expr,
-        $body:expr,
-        ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block
-    ) => {
-        $crate::send!($destination, $body, ($resp, $st: $user_state_ty) $callback_block, 30);
-    };
-
-    // ---------------------------------------------------------------------
-    // 2) Version with explicit timeout, but no on_timeout block
-    // ---------------------------------------------------------------------
-    (
-        $destination:expr,
-        $body:expr,
-        ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block,
-        $timeout:expr
-    ) => {{
-        // Insert a callback with no on_timeout
-        let correlation_id = uuid::Uuid::new_v4().to_string();
-        {
-            let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
-            if let Some(app_state_any) = guard.as_mut() {
-                app_state_any.pending_callbacks.insert(
-                    correlation_id.clone(),
-                    $crate::PendingCallback {
-                        on_success: Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
-                            // success
-                            let $resp = serde_json::from_slice(resp_bytes).map_err(|e| {
-                                anyhow::anyhow!("Failed to deserialize response: {}", e)
-                            })?;
-                            let $st = any_state.downcast_mut::<$user_state_ty>().ok_or_else(|| {
-                                anyhow::anyhow!("Downcast failed!")
-                            })?;
-                            $callback_block
-                            Ok(())
-                        }),
-                        on_timeout: None, // no custom timeout callback
-                    },
-                );
-            }
-        }
-
-        // Send the request with $timeout
-        let _ = kinode_process_lib::Request::to($destination)
+            .expects_response(total_timeout_seconds)
             .context(correlation_id.as_bytes())
-            .body($body)
-            .expects_response($timeout)
-            .send();
-    }};
-
-    // ---------------------------------------------------------------------
-    // 3) Version with explicit timeout AND an on_timeout block
-    // ---------------------------------------------------------------------
-    (
-        $destination:expr,
-        $body:expr,
-        ($resp:ident, $st:ident : $user_state_ty:ty) $callback_block:block,
-        $timeout:expr,
-        on_timeout => $timeout_block:block
-    ) => {{
-        let correlation_id = uuid::Uuid::new_v4().to_string();
-        {
-            let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
-            if let Some(app_state_any) = guard.as_mut() {
-                app_state_any.pending_callbacks.insert(
-                    correlation_id.clone(),
-                    $crate::PendingCallback {
-                        // ========== On Success ==========
-                        on_success: Box::new(move |resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
-                            let $resp = serde_json::from_slice(resp_bytes).map_err(|e| {
-                                anyhow::anyhow!("Failed to deserialize response: {}", e)
-                            })?;
-                            let $st = any_state.downcast_mut::<$user_state_ty>().ok_or_else(|| {
-                                anyhow::anyhow!("Downcast failed!")
-                            })?;
-                            $callback_block
-                            Ok(())
-                        }),
-                        // ========== On Timeout ==========
-                        on_timeout: Some(Box::new(move |any_state: &mut dyn std::any::Any| {
-                            let $st = any_state
-                                .downcast_mut::<$user_state_ty>()
-                                .ok_or_else(|| anyhow::anyhow!("Downcast failed!"))?;
-                            $timeout_block
-                            Ok(())
-                        })),
-                    },
-                );
-            }
-        }
-
-        let _ = kinode_process_lib::Request::to($destination)
-            .context(correlation_id.as_bytes())
-            .body($body)
-            .expects_response($timeout)
             .send();
     }};
 }
@@ -191,11 +77,13 @@ pub trait State {
     fn new() -> Self;
 }
 
-/// Creates a standard Kinode application with HTTP server and WebSocket support
 pub fn app<S, T1, T2, T3>(
     app_name: &str,
     app_icon: Option<&str>,
     app_widget: Option<&str>,
+    ui_config: http::server::HttpBindingConfig,
+    api_config: http::server::HttpBindingConfig,
+    ws_config: http::server::WsBindingConfig,
     handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
@@ -217,32 +105,28 @@ where
         info!("starting app");
         let mut server = http::server::HttpServer::new(5);
 
-        if let Err(e) = server.serve_ui("ui", vec!["/"], http::server::HttpBindingConfig::default())
-        {
+        if let Err(e) = server.serve_ui("ui", vec!["/"], ui_config.clone()) {
             panic!("failed to serve UI: {e}");
         }
 
         server
-            .bind_http_path("/api", http::server::HttpBindingConfig::default())
+            .bind_http_path("/api", api_config.clone())
             .expect("failed to serve API path");
 
         server
-            .bind_ws_path("/updates", http::server::WsBindingConfig::default())
+            .bind_ws_path("/updates", ws_config.clone())
             .expect("failed to bind WS path");
 
-        // 1) Load or init the typed state - now with graceful fallback
         let mut existing =
             get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes)).unwrap_or_else(|| S::new());
 
         init_fn(&mut existing);
 
-        // 2) Put the user's S into the global as Box<dyn Any>
         {
             let mut guard = GLOBAL_APP_STATE.lock().unwrap();
             *guard = Some(AppState::new(existing));
         }
 
-        // 3) main loop
         loop {
             match await_message() {
                 // -------------------------------------------------------
@@ -555,38 +439,45 @@ fn pretty_print_send_error(error: &SendError) {
 
 /// Creates and exports your Kinode microservice with all standard boilerplate.
 ///
-/// **Arguments**:
-///
-/// - `$app_name`: &str — Your app name.
-/// - `$app_icon`: Option<&str> — The app icon path/URL or `None`.
-/// - `$app_widget`: Option<&str> — The main widget path/ID or `None`.
+/// **Parameters**:
+/// - `$app_name`: &str — The display name of your app.
+/// - `$app_icon`: Option<&str> — Icon path or `None`.
+/// - `$app_widget`: Option<&str> — Widget path or `None`.
+/// - `$ui_config`: `HttpBindingConfig` — config for the UI (pass `.default()` if not needed).
+/// - `$api_config`: `HttpBindingConfig` — config for the `/api` endpoint.
+/// - `$ws_config`: `WsBindingConfig` — config for the `/updates` path.
 /// - `$handle_api_call`, `$handle_local_request`, `$handle_remote_request`, `$handle_ws`:
-///   your 4 request-handling functions.
-/// - `$init_fn`: a function `fn(&mut S)` that is called once after
-///   everything is set up but before the main loop. If you don’t need
-///   custom logic, pass in a do-nothing function.
+///   the 4 request-handling functions.
+/// - `$init_fn`: function `fn(&mut S)` called after setup, before the main loop.
 ///
-/// **Example** (using a no-op init):
+/// **Example**:
 ///
 /// ```ignore
-/// fn handle_api_call(state: &mut MyState, req: MyReq) -> (HttpResponse, Vec<u8>) { /* ... */ }
-/// fn handle_local_request(_msg: &Message, _state: &mut MyState, _server: &mut HttpServer, _req: MyLocal){ /* ... */ }
-/// fn handle_remote_request(_msg: &Message, _state: &mut MyState, _server: &mut HttpServer, _req: MyRemote){ /* ... */ }
-/// fn handle_ws(_state: &mut MyState, _server: &mut HttpServer, _channel_id: u32, _msg_type: WsMessageType, _blob: LazyLoadBlob){/*...*/}
+/// use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
 ///
-/// fn noop_init(_state: &mut MyState) {
-///     // do nothing
+/// fn handle_api_call(state: &mut MyState, req: MyRequest) -> (HttpResponse, Vec<u8>) {
+///     // ...
+/// }
+/// fn handle_local_request(_msg: &Message, _state: &mut MyState, _srv: &mut HttpServer, _req: MyLocal) { }
+/// fn handle_remote_request(_msg: &Message, _state: &mut MyState, _srv: &mut HttpServer, _req: MyRemote) { }
+/// fn handle_ws(_state: &mut MyState, _srv: &mut HttpServer, _id: u32, _typ: WsMessageType, _blob: LazyLoadBlob) { }
+///
+/// fn my_init_fn(state: &mut MyState) {
+///     // custom logic (timers, logs, etc.)
 /// }
 ///
 /// erect!(
 ///     "My App",
 ///     Some("icon.png"),
 ///     Some("widget_id"),
+///     HttpBindingConfig::default(), // config for serving UI
+///     HttpBindingConfig::default(), // config for /api
+///     WsBindingConfig::default(),   // config for /updates
 ///     handle_api_call,
 ///     handle_local_request,
 ///     handle_remote_request,
 ///     handle_ws,
-///     noop_init
+///     my_init_fn
 /// );
 /// ```
 #[macro_export]
@@ -595,6 +486,9 @@ macro_rules! erect {
         $app_name:expr,
         $app_icon:expr,
         $app_widget:expr,
+        $ui_config:expr,
+        $api_config:expr,
+        $ws_config:expr,
         $handle_api_call:ident,
         $handle_local_request:ident,
         $handle_remote_request:ident,
@@ -604,15 +498,19 @@ macro_rules! erect {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
+                // Pass in all arguments to `app`
                 let init_closure = $crate::app(
                     $app_name,
                     $app_icon,
                     $app_widget,
+                    $ui_config,
+                    $api_config,
+                    $ws_config,
                     $handle_api_call,
                     $handle_local_request,
                     $handle_remote_request,
                     $handle_ws,
-                    $init_fn, // always provide the function, no optional
+                    $init_fn,
                 );
                 init_closure();
             }

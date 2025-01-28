@@ -8,7 +8,7 @@ use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::http::StatusCode;
 use kinode_process_lib::LazyLoadBlob;
 use kinode_process_lib::Response;
-
+use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
 mod http_handlers;
 mod kino_local_handlers;
 mod kino_remote_handlers;
@@ -35,6 +35,9 @@ erect!(
     "Async Requester",
     None,
     None,
+    HttpBindingConfig::default(),
+    HttpBindingConfig::default(),
+    WsBindingConfig::default(),
     http_handler,
     kino_local_handler,
     kino_remote_handler,
