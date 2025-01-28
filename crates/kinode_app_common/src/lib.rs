@@ -1,13 +1,11 @@
-
+use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
 use kinode_process_lib::logging::Level;
-use kinode_process_lib::http::server::WsMessageType;
 use std::any::Any;
 use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Mutex;
-
 
 use once_cell::sync::Lazy;
 
@@ -82,7 +80,6 @@ macro_rules! timer {
         request.send().unwrap();
     }};
 }
-
 
 #[macro_export]
 macro_rules! send {
@@ -203,6 +200,7 @@ pub fn app<S, T1, T2, T3>(
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
     handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
+    init_fn: fn(&mut S),
 ) -> impl Fn()
 where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
@@ -233,8 +231,10 @@ where
             .expect("failed to bind WS path");
 
         // 1) Load or init the typed state - now with graceful fallback
-        let existing =
+        let mut existing =
             get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes)).unwrap_or_else(|| S::new());
+
+        init_fn(&mut existing);
 
         // 2) Put the user's S into the global as Box<dyn Any>
         {
@@ -553,51 +553,68 @@ fn pretty_print_send_error(error: &SendError) {
     );
 }
 
-/// -------------- 3) The "app!" macros for exporting  ----------------
+/// Creates and exports your Kinode microservice with all standard boilerplate.
+///
+/// **Arguments**:
+///
+/// - `$app_name`: &str — Your app name.
+/// - `$app_icon`: Option<&str> — The app icon path/URL or `None`.
+/// - `$app_widget`: Option<&str> — The main widget path/ID or `None`.
+/// - `$handle_api_call`, `$handle_local_request`, `$handle_remote_request`, `$handle_ws`:
+///   your 4 request-handling functions.
+/// - `$init_fn`: a function `fn(&mut S)` that is called once after
+///   everything is set up but before the main loop. If you don’t need
+///   custom logic, pass in a do-nothing function.
+///
+/// **Example** (using a no-op init):
+///
+/// ```ignore
+/// fn handle_api_call(state: &mut MyState, req: MyReq) -> (HttpResponse, Vec<u8>) { /* ... */ }
+/// fn handle_local_request(_msg: &Message, _state: &mut MyState, _server: &mut HttpServer, _req: MyLocal){ /* ... */ }
+/// fn handle_remote_request(_msg: &Message, _state: &mut MyState, _server: &mut HttpServer, _req: MyRemote){ /* ... */ }
+/// fn handle_ws(_state: &mut MyState, _server: &mut HttpServer, _channel_id: u32, _msg_type: WsMessageType, _blob: LazyLoadBlob){/*...*/}
+///
+/// fn noop_init(_state: &mut MyState) {
+///     // do nothing
+/// }
+///
+/// erect!(
+///     "My App",
+///     Some("icon.png"),
+///     Some("widget_id"),
+///     handle_api_call,
+///     handle_local_request,
+///     handle_remote_request,
+///     handle_ws,
+///     noop_init
+/// );
+/// ```
 #[macro_export]
 macro_rules! erect {
-    ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident) => {
+    (
+        $app_name:expr,
+        $app_icon:expr,
+        $app_widget:expr,
+        $handle_api_call:ident,
+        $handle_local_request:ident,
+        $handle_remote_request:ident,
+        $handle_ws:ident,
+        $init_fn:ident
+    ) => {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
-                let init = $crate::app(
+                let init_closure = $crate::app(
                     $app_name,
                     $app_icon,
                     $app_widget,
-                    $f1,
-                    |_, _, _, _: ()| {},
-                    $f2,
-                    |_, _, _, _| {}, // no-op ws handler
+                    $handle_api_call,
+                    $handle_local_request,
+                    $handle_remote_request,
+                    $handle_ws,
+                    $init_fn, // always provide the function, no optional
                 );
-                init();
-            }
-        }
-        export!(Component);
-    };
-    ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident, $f3:ident) => {
-        struct Component;
-        impl Guest for Component {
-            fn init(_our: String) {
-                let init = $crate::app(
-                    $app_name,
-                    $app_icon,
-                    $app_widget,
-                    $f1,
-                    $f2,
-                    |_, _, _, _: ()| {},
-                    $f3,
-                );
-                init();
-            }
-        }
-        export!(Component);
-    };
-    ($app_name:expr, $app_icon:expr, $app_widget:expr, $f1:ident, $f2:ident, $f3:ident, $f4:ident) => {
-        struct Component;
-        impl Guest for Component {
-            fn init(_our: String) {
-                let init = $crate::app($app_name, $app_icon, $app_widget, $f1, $f2, $f3, $f4);
-                init();
+                init_closure();
             }
         }
         export!(Component);

@@ -27,12 +27,17 @@ wit_bindgen::generate!({
     additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
 });
 
+fn init_fn(_state: &mut AppState) {
+    kiprintln!("Initializing Async Requester");
+}
+
 erect!(
-    "Async Receiver",
+    "Async Requester",
     None,
     None,
     http_handler,
     kino_local_handler,
     kino_remote_handler,
-    ws_handler
+    ws_handler,
+    init_fn
 );
