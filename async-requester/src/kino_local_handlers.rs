@@ -1,8 +1,17 @@
 use crate::*;
+use kinode_process_lib::timer::TimerAction;
 
 /// This will get triggered with a terminal request
 /// For example, if you run `m our@async-requester:async-app:template.os '"abc"'`
 /// Then we will message the async receiver who will sleep 3s then answer.
+fn some_function() {
+    timer!(3000, (st: ProcessState) {
+        st.counter += 1;
+        kiprintln!("5-second timer finished and counter is {}", st.counter);
+        some_function();
+    });
+}
+
 pub fn kino_local_handler(
     _message: &Message,
     _state: &mut ProcessState,
@@ -10,6 +19,7 @@ pub fn kino_local_handler(
     _request: String,
 ) {
     kiprintln!("Sender: Sending message to receiver");
+    some_function();
 
     send_async!(
         receiver_address(),

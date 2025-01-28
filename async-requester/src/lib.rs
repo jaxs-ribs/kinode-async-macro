@@ -9,6 +9,7 @@ use kinode_process_lib::LazyLoadBlob;
 use kinode_app_common::erect;
 use kinode_app_common::State;
 use shared::receiver_address;
+use kinode_app_common::timer;
 
 use proc_macro_send::send_async;
 

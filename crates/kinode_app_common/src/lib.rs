@@ -1,11 +1,13 @@
-use kinode_process_lib::http::server::WsMessageType;
+
 use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
 use kinode_process_lib::logging::Level;
+use kinode_process_lib::http::server::WsMessageType;
 use std::any::Any;
 use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Mutex;
+
 
 use once_cell::sync::Lazy;
 
@@ -36,6 +38,51 @@ impl AppState {
 
 /// A single global that holds the entire application state
 pub static GLOBAL_APP_STATE: Lazy<Mutex<Option<AppState>>> = Lazy::new(|| Mutex::new(None));
+
+#[macro_export]
+macro_rules! timer {
+    ($duration:expr, ($st:ident : $user_state_ty:ty) $callback_block:block) => {{
+        use uuid::Uuid; // Make sure `uuid` crate is in scope
+
+        // 1) Generate a correlation_id
+        let correlation_id = Uuid::new_v4().to_string();
+
+        // 2) Insert the callback into the global callback map
+        {
+            let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
+            if let Some(app_state_any) = guard.as_mut() {
+                app_state_any.pending_callbacks.insert(
+                    correlation_id.clone(),
+                    $crate::PendingCallback {
+                        // This callback runs when the timer response arrives
+                        on_success: Box::new(move |_resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
+                            let $st = any_state
+                                .downcast_mut::<$user_state_ty>()
+                                .ok_or_else(|| anyhow::anyhow!("Downcast failed!"))?;
+                            $callback_block
+                            Ok(())
+                        }),
+                        // No timeout callback
+                        on_timeout: None,
+                    },
+                );
+            }
+        }
+
+        // 3) Construct and send the request
+        let total_timeout_seconds = ($duration / 1000) + 1;
+        let mut request = kinode_process_lib::Request::to(("our", "timer", "distro", "sys"))
+            .body(TimerAction::SetTimer($duration))
+            .expects_response(total_timeout_seconds);
+
+        // 4) Attach correlation_id so the framework can match the response
+        request = request.context(correlation_id.as_bytes());
+
+        // 5) Fire it off
+        request.send().unwrap();
+    }};
+}
+
 
 #[macro_export]
 macro_rules! send {
