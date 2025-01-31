@@ -28,11 +28,11 @@ wit_bindgen::generate!({
 });
 
 fn init_fn(_state: &mut AppState) {
-    kiprintln!("Initializing Async Requester");
+    kiprintln!("Initializing Async Receiver A");
 }
 
 erect!(
-    "Async Requester",
+    "Async Receiver A",
     None,
     None,
     HttpBindingConfig::default(),
@@ -44,3 +44,4 @@ erect!(
     ws_handler,
     init_fn
 );
+
