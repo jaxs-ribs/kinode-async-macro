@@ -3,8 +3,8 @@ use kinode_process_lib::Address;
 use process_macros::SerdeJsonInto;
 use serde::{Deserialize, Serialize};
 
-pub fn receiver_address() -> Address {
-    ("our", "async-receiver", "async-app", "uncentered.os").into()
+pub fn receiver_address_a() -> Address {
+    ("our", "async-receiver-a", "async-app", "uncentered.os").into()
 }
 
 pub fn requester_address() -> Address {

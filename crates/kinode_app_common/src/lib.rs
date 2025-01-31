@@ -1,6 +1,8 @@
+use kinode_process_lib::get_state;
 use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
+use kinode_process_lib::logging::warn;
 use kinode_process_lib::logging::Level;
 use std::any::Any;
 use std::collections::HashMap;
@@ -10,8 +12,8 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
 use kinode_process_lib::{
-    await_message, get_typed_state, homepage, http, kiprintln, set_state, LazyLoadBlob, Message,
-    SendError, SendErrorKind,
+    await_message, homepage, http, kiprintln, set_state, LazyLoadBlob, Message, SendError,
+    SendErrorKind,
 };
 
 /// The application state containing the callback map plus the user state. This is the actual state.
@@ -77,6 +79,47 @@ pub trait State {
     fn new() -> Self;
 }
 
+/// Initialize state from persisted storage or create new if none exists
+fn initialize_state<S>() -> S
+where
+    S: State + for<'de> serde::Deserialize<'de>,
+{
+    match get_state() {
+        Some(bytes) => match rmp_serde::from_slice::<S>(&bytes) {
+            Ok(state) => state,
+            Err(e) => {
+                panic!("error deserializing existing state: {e}. We're panicking because we don't want to nuke state by setting it to a new instance.");
+            }
+        },
+        None => {
+            info!("no existing state, creating new one");
+            S::new()
+        }
+    }
+}
+
+fn setup_server(
+    ui_config: &http::server::HttpBindingConfig,
+    api_config: &http::server::HttpBindingConfig,
+    ws_config: &http::server::WsBindingConfig,
+) -> http::server::HttpServer {
+    let mut server = http::server::HttpServer::new(5);
+
+    if let Err(e) = server.serve_ui("ui", vec!["/"], ui_config.clone()) {
+        panic!("failed to serve UI: {e}");
+    }
+
+    server
+        .bind_http_path("/api", api_config.clone())
+        .expect("failed to serve API path");
+
+    server
+        .bind_ws_path("/updates", ws_config.clone())
+        .expect("failed to bind WS path");
+
+    server
+}
+
 pub fn app<S, T1, T2, T3>(
     app_name: &str,
     app_icon: Option<&str>,
@@ -103,97 +146,46 @@ where
     move || {
         init_logging(Level::DEBUG, Level::INFO, None, Some((0, 0, 1, 1)), None).unwrap();
         info!("starting app");
-        let mut server = http::server::HttpServer::new(5);
 
-        if let Err(e) = server.serve_ui("ui", vec!["/"], ui_config.clone()) {
-            panic!("failed to serve UI: {e}");
-        }
+        let mut server = setup_server(&ui_config, &api_config, &ws_config);
+        let existing = initialize_state::<S>();
 
-        server
-            .bind_http_path("/api", api_config.clone())
-            .expect("failed to serve API path");
+        // TODO: Make general func?
+        // Initialize the global and user state
+        let mut binding = GLOBAL_APP_STATE.lock().unwrap();
+        *binding = Some(AppState::new(existing));
+        let mut global_state = binding.as_mut().unwrap();
+        let mut user_state = global_state.user_state.downcast_mut::<S>().unwrap();
 
-        server
-            .bind_ws_path("/updates", ws_config.clone())
-            .expect("failed to bind WS path");
-
-        let mut existing =
-            get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes)).unwrap_or_else(|| S::new());
-
-        init_fn(&mut existing);
-
-        {
-            let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-            *guard = Some(AppState::new(existing));
-        }
+        // Execute the user specified init function
+        init_fn(&mut user_state);
 
         loop {
             match await_message() {
-                // -------------------------------------------------------
-                // Handle SendError (timeout, disconnected, etc.)
-                // -------------------------------------------------------
                 Err(send_error) => {
                     pretty_print_send_error(&send_error);
-
-                    // We'll extract the correlation_id from send_error.context()
-                    let correlation_id = send_error
+                    let Some(correlation_id) = send_error
                         .context
                         .as_ref()
-                        .map(|bytes| String::from_utf8_lossy(bytes).to_string());
+                        .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+                    else {
+                        continue;
+                    };
 
-                    let mut maybe_state: Option<S> = None;
-                    let mut maybe_timeout_callback: Option<
-                        Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>,
-                    > = None;
-
-                    {
-                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                        if let Some(app_state) = guard.as_mut() {
-                            // Extract user state S by "taking it out"
-                            let original_box =
-                                std::mem::replace(&mut app_state.user_state, Box::new(()));
-                            if original_box.is::<S>() {
-                                if let Ok(real_s_box) = original_box.downcast::<S>() {
-                                    let s = *real_s_box;
-                                    maybe_state = Some(s);
-                                }
-                            } else {
-                                app_state.user_state = original_box;
-                            }
-
-                            // If there's a correlation_id, see if there's a matching callback
-                            if let Some(cid) = &correlation_id {
-                                if let Some(pending) = app_state.pending_callbacks.remove(cid) {
-                                    if matches!(send_error.kind, SendErrorKind::Timeout) {
-                                        maybe_timeout_callback = pending.on_timeout;
-                                    }
-                                }
-                            }
+                    let Some(pending) = global_state.pending_callbacks.remove(&correlation_id)
+                    else {
+                        warn!("No pending callback found for correlation id: {correlation_id}. This should never happen.");
+                        continue;
+                    };
+                    if let Some(cb) = pending.on_timeout {
+                        if let Err(e) = cb(user_state as &mut dyn Any) {
+                            kiprintln!("Error in on_timeout callback: {e}");
                         }
                     }
 
-                    // If we have a user-defined on_timeout callback, run it
-                    if let Some(ref mut state) = maybe_state {
-                        if let Some(cb) = maybe_timeout_callback {
-                            if let Err(e) = cb(state as &mut dyn Any) {
-                                kiprintln!("Error in on_timeout callback: {e}");
-                            }
-                        }
-                    }
-
-                    // put S back and persist
-                    {
-                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                        if let Some(app_state) = guard.as_mut() {
-                            if let Some(s) = maybe_state.take() {
-                                app_state.user_state = Box::new(s);
-                            }
-                            if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
-                                if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
-                                    let _ = set_state(&s_bytes);
-                                }
-                            }
-                        }
+                    // TODO: Zena: PERSIST THE STATE
+                    if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
+                        set_state(&s_bytes);
                     }
                 }
 
