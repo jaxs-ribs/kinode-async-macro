@@ -201,7 +201,7 @@ fn handle_message<S, T1, T2, T3>(
         .context()
         .map(|c| String::from_utf8_lossy(c).to_string());
 
-    // If we found a callback, run it
+    // Regular callback case
     if let Some(cid) = correlation_id {
         let pending = HIDDEN_STATE.with(|cell| {
             let mut hs = cell.borrow_mut();
@@ -216,6 +216,20 @@ fn handle_message<S, T1, T2, T3>(
             // Get a fresh borrow of user_state for serializing:
             if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
                 let _ = set_state(&s_bytes);
+            }
+            return;
+        }
+    }
+
+    // TODO: Zena: Entrypoint: This should be up there and you merge the regular callback case. 
+    // Fan out case
+    if let Some(cid) = correlation_id {
+        if let Some((agg_id, idx)) = parse_aggregator_cid(&cid) {
+            // aggregator subrequest => parse body => aggregator_mark_ok_if_exists
+            // For simplicity, parse as serde_json::Value
+            match serde_json::from_slice::<serde_json::Value>(message.body()) {
+                Ok(val) => aggregator_mark_ok_if_exists(&agg_id, idx, val, user_state),
+                Err(e) => aggregator_mark_err_if_exists(&agg_id, idx, anyhow::anyhow!(e), user_state),
             }
             return;
         }
@@ -440,10 +454,25 @@ fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, user_sta
         }
     }
 
+    // TODO: Zena: We need to persist after a successful finished fan out, not here.
+    if let Some((agg_id, idx)) = parse_aggregator_cid(&correlation_id) {
+        aggregator_mark_err_if_exists(&agg_id, idx, anyhow::anyhow!("timeout"), user_state);
+        return;
+    }
+
     // Persist the state - first downcast to S
     if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
         let _ = set_state(&s_bytes);
     }
+}
+
+// Parse a correlation id of the form "agg_id:idx"
+fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
+    let mut parts = corr.split(':');
+    let agg_id = parts.next()?.to_owned();
+    let idx_str = parts.next()?;
+    let idx = idx_str.parse::<usize>().ok()?;
+    Some((agg_id, idx))
 }
 
 /// Creates and exports your Kinode microservice with all standard boilerplate.
