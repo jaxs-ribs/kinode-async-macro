@@ -6,17 +6,24 @@ use kinode_process_lib::logging::warn;
 use kinode_process_lib::logging::Level;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Mutex;
 
-use once_cell::sync::Lazy;
+use std::cell::RefCell;
 
 use kinode_process_lib::{
     await_message, homepage, http, kiprintln, set_state, LazyLoadBlob, Message, SendError,
 };
 
+pub mod prelude {
+    pub use crate::HIDDEN_STATE;
+    // Add other commonly used items here
+}
+
+thread_local! {
+    pub static HIDDEN_STATE: RefCell<Option<HiddenState>> = RefCell::new(None);
+}
+
 /// The application state containing the callback map plus the user state. This is the actual state.
-pub struct AppState {
-    pub user_state: Box<dyn Any + Send>,
+pub struct HiddenState {
     pub pending_callbacks: HashMap<String, PendingCallback>,
 }
 
@@ -25,16 +32,14 @@ pub struct PendingCallback {
     pub on_timeout: Option<Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>>,
 }
 
-impl AppState {
-    pub fn new<U: Any + Send>(user_state: U) -> Self {
+impl HiddenState {
+    pub fn new() -> Self {
         Self {
-            user_state: Box::new(user_state),
             pending_callbacks: HashMap::new(),
         }
     }
 }
 
-pub static GLOBAL_APP_STATE: Lazy<Mutex<Option<AppState>>> = Lazy::new(|| Mutex::new(None));
 
 #[macro_export]
 macro_rules! timer {
@@ -43,10 +48,10 @@ macro_rules! timer {
 
         let correlation_id = Uuid::new_v4().to_string();
 
-        {
-            let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
-            if let Some(app_state_any) = guard.as_mut() {
-                app_state_any.pending_callbacks.insert(
+        $crate::HIDDEN_STATE.with(|cell| {
+            let mut hs = cell.borrow_mut();
+            if let Some(ref mut hidden_state) = *hs {
+                hidden_state.pending_callbacks.insert(
                     correlation_id.clone(),
                     $crate::PendingCallback {
                         on_success: Box::new(move |_resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
@@ -60,7 +65,7 @@ macro_rules! timer {
                     },
                 );
             }
-        }
+        });
 
         let total_timeout_seconds = ($duration / 1000) + 1;
         let _ = kinode_process_lib::Request::to(("our", "timer", "distro", "sys"))
@@ -137,6 +142,11 @@ where
     T2: serde::Serialize + serde::de::DeserializeOwned,
     T3: serde::Serialize + serde::de::DeserializeOwned,
 {
+    HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        *hs = Some(HiddenState::new());
+    });
+
     if app_icon.is_some() && app_widget.is_some() {
         homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
     }
@@ -146,24 +156,19 @@ where
         info!("starting app");
 
         let mut server = setup_server(&ui_config, &api_config, &ws_config);
-        let existing = initialize_state::<S>();
-
-        // TODO: Make general func?
-        // Initialize the global and user state
-        let mut binding = GLOBAL_APP_STATE.lock().unwrap();
-        *binding = Some(AppState::new(existing));
-        let mut global_state = binding.as_mut().unwrap();
+        let mut user_state = initialize_state::<S>();
 
         // Execute the user specified init function
+        // Note: It should always be called _after_ the hidden state is initialized, so that
+        // users can call macros that depend on having the callback map in the hidden state.
         {
-            let user_state = global_state.user_state.downcast_mut::<S>().unwrap();
-            init_fn(user_state);
+            init_fn(&mut user_state);
         }
 
         loop {
             match await_message() {
                 Err(send_error) => {
-                    handle_send_error::<S>(&send_error, &mut global_state);
+                    handle_send_error::<S>(&send_error, &mut user_state);
                 }
                 Ok(message) => {
                     // Get the correlation id
@@ -173,14 +178,18 @@ where
 
                     // If we found a callback, run it
                     if let Some(cid) = correlation_id {
-                        if let Some(pending) = global_state.pending_callbacks.remove(&cid) {
-                            if let Err(e) = (pending.on_success)(message.body(), &mut global_state.user_state) {
+                        let pending = HIDDEN_STATE.with(|cell| {
+                            let mut hs = cell.borrow_mut();
+                            hs.as_mut().and_then(|state| state.pending_callbacks.remove(&cid))
+                        });
+                        if let Some(pending) = pending {
+                            // EXECUTE the callback
+                            if let Err(e) = (pending.on_success)(message.body(), &mut user_state) {
                                 kiprintln!("Error in callback: {e}");
                             }
                             // Get a fresh borrow of user_state for serializing:
                             {
-                                let user_state = global_state.user_state.downcast_mut::<S>().unwrap();
-                                if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
+                                if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
                                     let _ = set_state(&s_bytes);
                                 }
                             }
@@ -190,12 +199,10 @@ where
 
                     if message.is_local() {
                         if message.source().process == "http-server:distro:sys" {
-                            // Pass the user_state as a temporary borrow and also pass the closures by reference.
                             {
-                                let user_state = global_state.user_state.downcast_mut::<S>().unwrap();
                                 http_request(
                                     &message,
-                                    user_state,
+                                    &mut user_state,
                                     &mut server,
                                     &handle_api_call,
                                     &handle_ws
@@ -203,21 +210,18 @@ where
                             }
                         } else {
                             {
-                                let user_state = global_state.user_state.downcast_mut::<S>().unwrap();
-                                local_request(&message, user_state, &mut server, &handle_local_request);
+                                local_request(&message, &mut user_state, &mut server, &handle_local_request);
                             }
                         }
                     } else {
                         {
-                            let user_state = global_state.user_state.downcast_mut::<S>().unwrap();
-                            remote_request(&message, user_state, &mut server, &handle_remote_request);
+                            remote_request(&message, &mut user_state, &mut server, &handle_remote_request);
                         }
                     }
 
                     // Persist the state with a new temporary borrow.
                     {
-                        let user_state = global_state.user_state.downcast_mut::<S>().unwrap();
-                        if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
+                        if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
                             let _ = set_state(&s_bytes);
                         }
                     }
@@ -337,7 +341,7 @@ fn pretty_print_send_error(error: &SendError) {
 
 fn handle_send_error<S: Any + serde::Serialize>(
     send_error: &SendError,
-    global_state: &mut AppState,
+    user_state: &mut S,
 ) {
     // Print the error
     pretty_print_send_error(send_error);
@@ -351,24 +355,28 @@ fn handle_send_error<S: Any + serde::Serialize>(
         return;
     };
 
+    let pending = HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        hs.as_mut().and_then(|st| st.pending_callbacks.remove(&correlation_id))
+    });
+
+
     // Remove the pending callback
-    let Some(pending) = global_state.pending_callbacks.remove(&correlation_id) else {
+    let Some(pending) = pending else {
         warn!("No pending callback found for correlation id: {correlation_id}. This should never happen.");
         return;
     };
 
     // Execute the timeout callback if it exists
     if let Some(cb) = pending.on_timeout {
-        if let Err(e) = cb(&mut global_state.user_state) {
+        if let Err(e) = cb(user_state) {
             kiprintln!("Error in on_timeout callback: {e}");
         }
     }
 
     // Persist the state - first downcast to S
-    if let Some(state_ref) = global_state.user_state.downcast_ref::<S>() {
-        if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
-            let _ = set_state(&s_bytes);
-        }
+    if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
+        let _ = set_state(&s_bytes);
     }
 }
 
@@ -433,7 +441,8 @@ macro_rules! erect {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
-                // Pass in all arguments to `app`
+                use kinode_app_common::prelude::*;
+                
                 let init_closure = $crate::app(
                     $app_name,
                     $app_icon,
