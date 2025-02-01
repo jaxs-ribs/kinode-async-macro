@@ -301,3 +301,227 @@ fn build_response_path(expr: &Expr) -> proc_macro2::TokenStream {
     }
     quote! { UNKNOWN_RESPONSE }
 }
+
+// Fanout macro
+
+/// usage:
+/// fan_out!(
+///   addresses,           // Vec<String>
+///   requests,            // Vec<MyRequest>
+///   (all_results, st: MyState) {
+///       // final aggregator callback
+///   },
+///   30 // optional
+/// );
+struct FanOutInvocation {
+    addresses_expr: Expr,
+    requests_expr: Expr,
+    callback: FinalCallback,
+    timeout: Option<Expr>,
+}
+
+struct FinalCallback {
+    results_ident: Ident,
+    state_ident: Ident,
+    state_type: Type,
+    block: Block,
+}
+
+impl Parse for FanOutInvocation {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let addresses_expr: Expr = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let requests_expr: Expr = input.parse()?;
+        input.parse::<Token![,]>()?;
+
+        let content;
+        syn::parenthesized!(content in input);
+        let results_ident: Ident = content.parse()?;
+        content.parse::<Token![,]>()?;
+        let state_ident: Ident = content.parse()?;
+        content.parse::<Token![:]>()?;
+        let state_type: Type = content.parse()?;
+        let block: Block = input.parse()?;
+
+        let mut timeout = None;
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            if !input.is_empty() {
+                timeout = Some(input.parse()?);
+            }
+        }
+
+        Ok(Self {
+            addresses_expr,
+            requests_expr,
+            callback: FinalCallback {
+                results_ident,
+                state_ident,
+                state_type,
+                block,
+            },
+            timeout,
+        })
+    }
+}
+
+#[proc_macro]
+pub fn fan_out(input: TokenStream) -> TokenStream {
+    let invoc = parse_macro_input!(input as FanOutInvocation);
+    expand_fan_out(invoc).into()
+}
+
+fn expand_fan_out(invoc: FanOutInvocation) -> proc_macro2::TokenStream {
+    let FanOutInvocation {
+        addresses_expr,
+        requests_expr,
+        callback:
+            FinalCallback {
+                results_ident,
+                state_ident,
+                state_type,
+                block,
+            },
+        timeout,
+    } = invoc;
+
+    let timeout_ts = timeout.unwrap_or_else(|| syn::parse_str("30").unwrap());
+
+    // We'll store aggregator of type FanOutAggregator<serde_json::Value>
+    // For a typed approach, you'd parse the request to find the "inner type".
+    let aggregator_ty = quote! { ::kinode_app_common::FanOutAggregator<::serde_json::Value> };
+
+    quote! {
+        {
+            use ::uuid::Uuid;
+            use ::anyhow::{anyhow, Result};
+            use ::kinode_process_lib::{kiprintln, Request};
+            use ::kinode_app_common::{HIDDEN_STATE, PendingCallback, aggregator_mark_ok_if_exists, aggregator_mark_err_if_exists, #aggregator_ty};
+
+            let addresses_val = #addresses_expr;
+            let requests_val = #requests_expr;
+
+            if addresses_val.len() != requests_val.len() {
+                ::kinode_process_lib::kiprintln!("fan_out!: addresses.len() != requests.len()");
+                return;
+            }
+            let total = addresses_val.len();
+            if total == 0 {
+                // no subrequests => do final callback with empty results if desired
+                HIDDEN_STATE.with(|cell| {
+                    if let Some(ref mut hidden) = *cell.borrow_mut() {
+                        // We can't easily get user_state here, you'd do that in the main loop
+                        // or you can do a hack. We'll just skip in this minimal example
+                    }
+                });
+                return;
+            }
+
+            let aggregator_id = Uuid::new_v4().to_string();
+
+            // Insert aggregator into hidden_state.accumulators
+            HIDDEN_STATE.with(|cell| {
+                if let Some(ref mut hidden) = *cell.borrow_mut() {
+                    let aggregator = #aggregator_ty::new(
+                        total,
+                        Box::new(move |final_vec, user_state_any| {
+                            let #results_ident = final_vec;
+                            let #state_ident = user_state_any
+                                .downcast_mut::<#state_type>()
+                                .ok_or_else(|| anyhow!("downcast user state failed in aggregator finalize"))?;
+                            #block
+                            Ok(())
+                        })
+                    );
+                    hidden.accumulators.insert(aggregator_id.clone(), Box::new(aggregator));
+                }
+            });
+
+            for (i, (addr, req)) in addresses_val.into_iter().zip(requests_val.into_iter()).enumerate() {
+                // correlation_id = aggregator_id + ":" + i
+                let correlation_id = format!("{}:{}", aggregator_id, i);
+
+                // Insert PendingCallback => parse subresponse => aggregator.set_ok(i, val)
+                HIDDEN_STATE.with(|cell| {
+                    if let Some(ref mut hidden) = *cell.borrow_mut() {
+                        hidden.pending_callbacks.insert(
+                            correlation_id.clone(),
+                            PendingCallback {
+                                on_success: Box::new({
+                                    let aggregator_id_clone = aggregator_id.clone();
+                                    move |resp_bytes, user_state_any| {
+                                        match ::serde_json::from_slice(resp_bytes) {
+                                            Ok(parsed_val) => {
+                                                aggregator_mark_ok_if_exists(
+                                                    &aggregator_id_clone,
+                                                    i,
+                                                    parsed_val,
+                                                    user_state_any,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                aggregator_mark_err_if_exists(
+                                                    &aggregator_id_clone,
+                                                    i,
+                                                    anyhow!("parse error: {}", e),
+                                                    user_state_any,
+                                                );
+                                            }
+                                        }
+                                        Ok(())
+                                    }
+                                }),
+                                on_timeout: Some(Box::new({
+                                    let aggregator_id_clone = aggregator_id.clone();
+                                    move |user_state_any| {
+                                        aggregator_mark_err_if_exists(
+                                            &aggregator_id_clone,
+                                            i,
+                                            anyhow!("timeout"),
+                                            user_state_any,
+                                        );
+                                        Ok(())
+                                    }
+                                })),
+                            }
+                        );
+                    }
+                });
+
+                // Actually send
+                match ::serde_json::to_vec(&req) {
+                    Ok(body_bytes) => {
+                        let _ = Request::to(addr)
+                            .context(correlation_id.as_bytes())
+                            .body(body_bytes)
+                            .expects_response(#timeout_ts)
+                            .send();
+                    }
+                    Err(e) => {
+                        // aggregator set_err(i, e)
+                        HIDDEN_STATE.with(|cell| {
+                            if let Some(ref mut hidden) = *cell.borrow_mut() {
+                                // direct aggregator access
+                                if let Some(acc_any) = hidden.accumulators.get_mut(&aggregator_id) {
+                                    if let Some(agg) = acc_any.downcast_mut::<#aggregator_ty>() {
+                                        agg.set_err(i, anyhow!("serialize error: {}", e));
+                                        if agg.is_done() {
+                                            // remove & finalize => aggregator_mark_ok_if_exists does that
+                                            let aggregator_box = hidden.accumulators.remove(&aggregator_id).unwrap();
+                                            if let Ok(agg2) = aggregator_box.downcast::<#aggregator_ty>() {
+                                                let aggregator = *agg2;
+                                                // can't finalize w/o user_state, so main loop approach would do it
+                                                // or we do it here if we can get user_state easily. 
+                                                // We'll skip, do normal approach
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
+}

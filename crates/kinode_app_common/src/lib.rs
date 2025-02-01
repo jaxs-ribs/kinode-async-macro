@@ -25,6 +25,7 @@ thread_local! {
 /// The application state containing the callback map plus the user state. This is the actual state.
 pub struct HiddenState {
     pub pending_callbacks: HashMap<String, PendingCallback>,
+    pub accumulators: HashMap<String, Box<dyn Any + Send>>,
 }
 
 pub struct PendingCallback {
@@ -32,14 +33,72 @@ pub struct PendingCallback {
     pub on_timeout: Option<Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>>,
 }
 
+pub struct FanOutAggregator<T: Clone> {
+    total: usize,
+    results: Vec<Option<Result<T, anyhow::Error>>>,
+    completed: usize,
+
+    /// Called once, when completed == total
+    on_done: Box<dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send>,
+}
+
+impl<T: Clone> FanOutAggregator<T> {
+    pub fn new(
+        total: usize,
+        on_done: Box<dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send>,
+    ) -> Self {
+        let mut results = Vec::with_capacity(total);
+        for _ in 0..total {
+            results.push(None);
+        }
+
+        Self {
+            total,
+            results,
+            completed: 0,
+            on_done,
+        }
+    }
+
+    /// Mark the i-th subrequest as Ok
+    pub fn set_ok(&mut self, i: usize, val: T) {
+        if i < self.results.len() && self.results[i].is_none() {
+            self.results[i] = Some(Ok(val));
+            self.completed += 1;
+        }
+    }
+
+    /// Mark the i-th subrequest as an error
+    pub fn set_err(&mut self, i: usize, err: anyhow::Error) {
+        if i < self.results.len() && self.results[i].is_none() {
+            self.results[i] = Some(Err(err));
+            self.completed += 1;
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.completed >= self.total
+    }
+
+    /// Finalize => calls on_done(...) with the final vector
+    pub fn finalize(self, user_state: &mut dyn Any) -> anyhow::Result<()> {
+        let FanOutAggregator { results, on_done, .. } = self;
+        let final_vec = results.into_iter()
+            .map(|item| item.unwrap_or_else(|| Err(anyhow::anyhow!("missing subresponse"))))
+            .collect();
+
+        (on_done)(final_vec, user_state)
+    }
+}
+
 impl HiddenState {
     pub fn new() -> Self {
         Self {
             pending_callbacks: HashMap::new(),
+            accumulators: HashMap::new(),
         }
     }
 }
-
 
 #[macro_export]
 macro_rules! timer {
@@ -146,7 +205,8 @@ fn handle_message<S, T1, T2, T3>(
     if let Some(cid) = correlation_id {
         let pending = HIDDEN_STATE.with(|cell| {
             let mut hs = cell.borrow_mut();
-            hs.as_mut().and_then(|state| state.pending_callbacks.remove(&cid))
+            hs.as_mut()
+                .and_then(|state| state.pending_callbacks.remove(&cid))
         });
         if let Some(pending) = pending {
             // EXECUTE the callback
@@ -163,13 +223,7 @@ fn handle_message<S, T1, T2, T3>(
 
     if message.is_local() {
         if message.source().process == "http-server:distro:sys" {
-            http_request(
-                &message,
-                user_state,
-                server,
-                handle_api_call,
-                handle_ws
-            );
+            http_request(&message, user_state, server, handle_api_call, handle_ws);
         } else {
             local_request(&message, user_state, server, handle_local_request);
         }
@@ -354,10 +408,7 @@ fn pretty_print_send_error(error: &SendError) {
     );
 }
 
-fn handle_send_error<S: Any + serde::Serialize>(
-    send_error: &SendError,
-    user_state: &mut S,
-) {
+fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, user_state: &mut S) {
     // Print the error
     pretty_print_send_error(send_error);
 
@@ -372,9 +423,9 @@ fn handle_send_error<S: Any + serde::Serialize>(
 
     let pending = HIDDEN_STATE.with(|cell| {
         let mut hs = cell.borrow_mut();
-        hs.as_mut().and_then(|st| st.pending_callbacks.remove(&correlation_id))
+        hs.as_mut()
+            .and_then(|st| st.pending_callbacks.remove(&correlation_id))
     });
-
 
     // Remove the pending callback
     let Some(pending) = pending else {
@@ -457,7 +508,7 @@ macro_rules! erect {
         impl Guest for Component {
             fn init(_our: String) {
                 use kinode_app_common::prelude::*;
-                
+
                 let init_closure = $crate::app(
                     $app_name,
                     $app_icon,
@@ -527,3 +578,61 @@ macro_rules! declare_types {
 
 // Re-export paste for use in our macros
 pub use paste;
+
+/// Mark aggregator i as success
+pub fn aggregator_mark_ok_if_exists(
+    aggregator_id: &str,
+    i: usize,
+    val: serde_json::Value,
+    user_state_any: &mut dyn Any,
+) {
+    // Access hidden state
+    HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        if let Some(ref mut hidden) = *hs {
+            if let Some(acc_any) = hidden.accumulators.get_mut(aggregator_id) {
+                if let Some(agg) = acc_any.downcast_mut::<FanOutAggregator<serde_json::Value>>() {
+                    agg.set_ok(i, val);
+                    if agg.is_done() {
+                        // aggregator done => remove => finalize
+                        // Move aggregator out of the map
+                        let aggregator_box = hidden.accumulators.remove(aggregator_id).unwrap();
+                        if let Ok(agg) = aggregator_box.downcast::<FanOutAggregator<serde_json::Value>>() {
+                            let aggregator = *agg; // unbox
+                            if let Err(e) = aggregator.finalize(user_state_any) {
+                                kiprintln!("Error finalizing aggregator: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+pub fn aggregator_mark_err_if_exists(
+    aggregator_id: &str,
+    i: usize,
+    err: anyhow::Error,
+    user_state_any: &mut dyn Any,
+) {
+    HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        if let Some(ref mut hidden) = *hs {
+            if let Some(acc_any) = hidden.accumulators.get_mut(aggregator_id) {
+                if let Some(agg) = acc_any.downcast_mut::<FanOutAggregator<serde_json::Value>>() {
+                    agg.set_err(i, err);
+                    if agg.is_done() {
+                        let aggregator_box = hidden.accumulators.remove(aggregator_id).unwrap();
+                        if let Ok(agg) = aggregator_box.downcast::<FanOutAggregator<serde_json::Value>>() {
+                            let aggregator = *agg;
+                            if let Err(e) = aggregator.finalize(user_state_any) {
+                                kiprintln!("Error finalizing aggregator: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
