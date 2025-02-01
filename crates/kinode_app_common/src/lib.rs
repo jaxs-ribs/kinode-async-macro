@@ -123,6 +123,66 @@ fn setup_server(
     server
 }
 
+fn handle_message<S, T1, T2, T3>(
+    message: Message,
+    user_state: &mut S,
+    server: &mut http::server::HttpServer,
+    handle_api_call: &impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    handle_local_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
+    handle_remote_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
+    handle_ws: &impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
+) where
+    S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+    T1: serde::Serialize + serde::de::DeserializeOwned,
+    T2: serde::Serialize + serde::de::DeserializeOwned,
+    T3: serde::Serialize + serde::de::DeserializeOwned,
+{
+    // Get the correlation id
+    let correlation_id = message
+        .context()
+        .map(|c| String::from_utf8_lossy(c).to_string());
+
+    // If we found a callback, run it
+    if let Some(cid) = correlation_id {
+        let pending = HIDDEN_STATE.with(|cell| {
+            let mut hs = cell.borrow_mut();
+            hs.as_mut().and_then(|state| state.pending_callbacks.remove(&cid))
+        });
+        if let Some(pending) = pending {
+            // EXECUTE the callback
+            if let Err(e) = (pending.on_success)(message.body(), user_state) {
+                kiprintln!("Error in callback: {e}");
+            }
+            // Get a fresh borrow of user_state for serializing:
+            if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
+                let _ = set_state(&s_bytes);
+            }
+            return;
+        }
+    }
+
+    if message.is_local() {
+        if message.source().process == "http-server:distro:sys" {
+            http_request(
+                &message,
+                user_state,
+                server,
+                handle_api_call,
+                handle_ws
+            );
+        } else {
+            local_request(&message, user_state, server, handle_local_request);
+        }
+    } else {
+        remote_request(&message, user_state, server, handle_remote_request);
+    }
+
+    // Persist the state with a new temporary borrow.
+    if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
+        let _ = set_state(&s_bytes);
+    }
+}
+
 pub fn app<S, T1, T2, T3>(
     app_name: &str,
     app_icon: Option<&str>,
@@ -171,60 +231,15 @@ where
                     handle_send_error::<S>(&send_error, &mut user_state);
                 }
                 Ok(message) => {
-                    // Get the correlation id
-                    let correlation_id = message
-                        .context()
-                        .map(|c| String::from_utf8_lossy(c).to_string());
-
-                    // If we found a callback, run it
-                    if let Some(cid) = correlation_id {
-                        let pending = HIDDEN_STATE.with(|cell| {
-                            let mut hs = cell.borrow_mut();
-                            hs.as_mut().and_then(|state| state.pending_callbacks.remove(&cid))
-                        });
-                        if let Some(pending) = pending {
-                            // EXECUTE the callback
-                            if let Err(e) = (pending.on_success)(message.body(), &mut user_state) {
-                                kiprintln!("Error in callback: {e}");
-                            }
-                            // Get a fresh borrow of user_state for serializing:
-                            {
-                                if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
-                                    let _ = set_state(&s_bytes);
-                                }
-                            }
-                            continue;
-                        }
-                    }
-
-                    if message.is_local() {
-                        if message.source().process == "http-server:distro:sys" {
-                            {
-                                http_request(
-                                    &message,
-                                    &mut user_state,
-                                    &mut server,
-                                    &handle_api_call,
-                                    &handle_ws
-                                );
-                            }
-                        } else {
-                            {
-                                local_request(&message, &mut user_state, &mut server, &handle_local_request);
-                            }
-                        }
-                    } else {
-                        {
-                            remote_request(&message, &mut user_state, &mut server, &handle_remote_request);
-                        }
-                    }
-
-                    // Persist the state with a new temporary borrow.
-                    {
-                        if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
-                            let _ = set_state(&s_bytes);
-                        }
-                    }
+                    handle_message(
+                        message,
+                        &mut user_state,
+                        &mut server,
+                        &handle_api_call,
+                        &handle_local_request,
+                        &handle_remote_request,
+                        &handle_ws,
+                    );
                 }
             }
         }
