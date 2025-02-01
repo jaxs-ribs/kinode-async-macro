@@ -33,7 +33,7 @@ pub struct PendingCallback {
     pub on_timeout: Option<Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>>,
 }
 
-pub struct FanOutAggregator<T: Clone> {
+pub struct FanOutAggregator<T> {
     total: usize,
     results: Vec<Option<Result<T, anyhow::Error>>>,
     completed: usize,
@@ -42,7 +42,7 @@ pub struct FanOutAggregator<T: Clone> {
     on_done: Box<dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send>,
 }
 
-impl<T: Clone> FanOutAggregator<T> {
+impl<T> FanOutAggregator<T> {
     pub fn new(
         total: usize,
         on_done: Box<dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send>,
