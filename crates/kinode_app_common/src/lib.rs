@@ -1,22 +1,29 @@
+use kinode_process_lib::get_state;
 use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
+use kinode_process_lib::logging::warn;
 use kinode_process_lib::logging::Level;
 use std::any::Any;
 use std::collections::HashMap;
-use std::mem::replace;
-use std::sync::Mutex;
 
-use once_cell::sync::Lazy;
+use std::cell::RefCell;
 
 use kinode_process_lib::{
-    await_message, get_typed_state, homepage, http, kiprintln, set_state, LazyLoadBlob, Message,
-    SendError, SendErrorKind,
+    await_message, homepage, http, kiprintln, set_state, LazyLoadBlob, Message, SendError,
 };
 
+pub mod prelude {
+    pub use crate::HIDDEN_STATE;
+    // Add other commonly used items here
+}
+
+thread_local! {
+    pub static HIDDEN_STATE: RefCell<Option<HiddenState>> = RefCell::new(None);
+}
+
 /// The application state containing the callback map plus the user state. This is the actual state.
-pub struct AppState {
-    pub user_state: Box<dyn Any + Send>,
+pub struct HiddenState {
     pub pending_callbacks: HashMap<String, PendingCallback>,
 }
 
@@ -25,16 +32,14 @@ pub struct PendingCallback {
     pub on_timeout: Option<Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>>,
 }
 
-impl AppState {
-    pub fn new<U: Any + Send>(user_state: U) -> Self {
+impl HiddenState {
+    pub fn new() -> Self {
         Self {
-            user_state: Box::new(user_state),
             pending_callbacks: HashMap::new(),
         }
     }
 }
 
-pub static GLOBAL_APP_STATE: Lazy<Mutex<Option<AppState>>> = Lazy::new(|| Mutex::new(None));
 
 #[macro_export]
 macro_rules! timer {
@@ -43,10 +48,10 @@ macro_rules! timer {
 
         let correlation_id = Uuid::new_v4().to_string();
 
-        {
-            let mut guard = $crate::GLOBAL_APP_STATE.lock().unwrap();
-            if let Some(app_state_any) = guard.as_mut() {
-                app_state_any.pending_callbacks.insert(
+        $crate::HIDDEN_STATE.with(|cell| {
+            let mut hs = cell.borrow_mut();
+            if let Some(ref mut hidden_state) = *hs {
+                hidden_state.pending_callbacks.insert(
                     correlation_id.clone(),
                     $crate::PendingCallback {
                         on_success: Box::new(move |_resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
@@ -60,7 +65,7 @@ macro_rules! timer {
                     },
                 );
             }
-        }
+        });
 
         let total_timeout_seconds = ($duration / 1000) + 1;
         let _ = kinode_process_lib::Request::to(("our", "timer", "distro", "sys"))
@@ -75,6 +80,107 @@ macro_rules! timer {
 pub trait State {
     /// Creates a new instance of the state.
     fn new() -> Self;
+}
+
+/// Initialize state from persisted storage or create new if none exists
+fn initialize_state<S>() -> S
+where
+    S: State + for<'de> serde::Deserialize<'de>,
+{
+    match get_state() {
+        Some(bytes) => match rmp_serde::from_slice::<S>(&bytes) {
+            Ok(state) => state,
+            Err(e) => {
+                panic!("error deserializing existing state: {e}. We're panicking because we don't want to nuke state by setting it to a new instance.");
+            }
+        },
+        None => {
+            info!("no existing state, creating new one");
+            S::new()
+        }
+    }
+}
+
+fn setup_server(
+    ui_config: &http::server::HttpBindingConfig,
+    api_config: &http::server::HttpBindingConfig,
+    ws_config: &http::server::WsBindingConfig,
+) -> http::server::HttpServer {
+    let mut server = http::server::HttpServer::new(5);
+
+    if let Err(e) = server.serve_ui("ui", vec!["/"], ui_config.clone()) {
+        panic!("failed to serve UI: {e}");
+    }
+
+    server
+        .bind_http_path("/api", api_config.clone())
+        .expect("failed to serve API path");
+
+    server
+        .bind_ws_path("/updates", ws_config.clone())
+        .expect("failed to bind WS path");
+
+    server
+}
+
+fn handle_message<S, T1, T2, T3>(
+    message: Message,
+    user_state: &mut S,
+    server: &mut http::server::HttpServer,
+    handle_api_call: &impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    handle_local_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
+    handle_remote_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
+    handle_ws: &impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
+) where
+    S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+    T1: serde::Serialize + serde::de::DeserializeOwned,
+    T2: serde::Serialize + serde::de::DeserializeOwned,
+    T3: serde::Serialize + serde::de::DeserializeOwned,
+{
+    // Get the correlation id
+    let correlation_id = message
+        .context()
+        .map(|c| String::from_utf8_lossy(c).to_string());
+
+    // If we found a callback, run it
+    if let Some(cid) = correlation_id {
+        let pending = HIDDEN_STATE.with(|cell| {
+            let mut hs = cell.borrow_mut();
+            hs.as_mut().and_then(|state| state.pending_callbacks.remove(&cid))
+        });
+        if let Some(pending) = pending {
+            // EXECUTE the callback
+            if let Err(e) = (pending.on_success)(message.body(), user_state) {
+                kiprintln!("Error in callback: {e}");
+            }
+            // Get a fresh borrow of user_state for serializing:
+            if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
+                let _ = set_state(&s_bytes);
+            }
+            return;
+        }
+    }
+
+    if message.is_local() {
+        if message.source().process == "http-server:distro:sys" {
+            http_request(
+                &message,
+                user_state,
+                server,
+                handle_api_call,
+                handle_ws
+            );
+        } else {
+            local_request(&message, user_state, server, handle_local_request);
+        }
+    } else {
+        remote_request(&message, user_state, server, handle_remote_request);
+    }
+
+    // Persist the state with a new temporary borrow.
+    if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
+        let _ = set_state(&s_bytes);
+    }
 }
 
 pub fn app<S, T1, T2, T3>(
@@ -96,6 +202,11 @@ where
     T2: serde::Serialize + serde::de::DeserializeOwned,
     T3: serde::Serialize + serde::de::DeserializeOwned,
 {
+    HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        *hs = Some(HiddenState::new());
+    });
+
     if app_icon.is_some() && app_widget.is_some() {
         homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
     }
@@ -103,226 +214,32 @@ where
     move || {
         init_logging(Level::DEBUG, Level::INFO, None, Some((0, 0, 1, 1)), None).unwrap();
         info!("starting app");
-        let mut server = http::server::HttpServer::new(5);
 
-        if let Err(e) = server.serve_ui("ui", vec!["/"], ui_config.clone()) {
-            panic!("failed to serve UI: {e}");
-        }
+        let mut server = setup_server(&ui_config, &api_config, &ws_config);
+        let mut user_state = initialize_state::<S>();
 
-        server
-            .bind_http_path("/api", api_config.clone())
-            .expect("failed to serve API path");
-
-        server
-            .bind_ws_path("/updates", ws_config.clone())
-            .expect("failed to bind WS path");
-
-        let mut existing =
-            get_typed_state(|bytes| rmp_serde::from_slice::<S>(bytes)).unwrap_or_else(|| S::new());
-
-        init_fn(&mut existing);
-
+        // Execute the user specified init function
+        // Note: It should always be called _after_ the hidden state is initialized, so that
+        // users can call macros that depend on having the callback map in the hidden state.
         {
-            let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-            *guard = Some(AppState::new(existing));
+            init_fn(&mut user_state);
         }
 
         loop {
             match await_message() {
-                // -------------------------------------------------------
-                // Handle SendError (timeout, disconnected, etc.)
-                // -------------------------------------------------------
                 Err(send_error) => {
-                    pretty_print_send_error(&send_error);
-
-                    // We'll extract the correlation_id from send_error.context()
-                    let correlation_id = send_error
-                        .context
-                        .as_ref()
-                        .map(|bytes| String::from_utf8_lossy(bytes).to_string());
-
-                    let mut maybe_state: Option<S> = None;
-                    let mut maybe_timeout_callback: Option<
-                        Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>,
-                    > = None;
-
-                    {
-                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                        if let Some(app_state) = guard.as_mut() {
-                            // Extract user state S by "taking it out"
-                            let original_box =
-                                std::mem::replace(&mut app_state.user_state, Box::new(()));
-                            if original_box.is::<S>() {
-                                if let Ok(real_s_box) = original_box.downcast::<S>() {
-                                    let s = *real_s_box;
-                                    maybe_state = Some(s);
-                                }
-                            } else {
-                                app_state.user_state = original_box;
-                            }
-
-                            // If there's a correlation_id, see if there's a matching callback
-                            if let Some(cid) = &correlation_id {
-                                if let Some(pending) = app_state.pending_callbacks.remove(cid) {
-                                    if matches!(send_error.kind, SendErrorKind::Timeout) {
-                                        maybe_timeout_callback = pending.on_timeout;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // If we have a user-defined on_timeout callback, run it
-                    if let Some(ref mut state) = maybe_state {
-                        if let Some(cb) = maybe_timeout_callback {
-                            if let Err(e) = cb(state as &mut dyn Any) {
-                                kiprintln!("Error in on_timeout callback: {e}");
-                            }
-                        }
-                    }
-
-                    // put S back and persist
-                    {
-                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                        if let Some(app_state) = guard.as_mut() {
-                            if let Some(s) = maybe_state.take() {
-                                app_state.user_state = Box::new(s);
-                            }
-                            if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
-                                if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
-                                    let _ = set_state(&s_bytes);
-                                }
-                            }
-                        }
-                    }
+                    handle_send_error::<S>(&send_error, &mut user_state);
                 }
-
-                // -------------------------------------------------------
-                // Otherwise, normal message
-                // -------------------------------------------------------
                 Ok(message) => {
-                    let mut maybe_callback: Option<
-                        Box<dyn FnOnce(&[u8], &mut dyn Any) -> anyhow::Result<()> + Send>,
-                    > = None;
-                    let mut maybe_state: Option<S> = None;
-
-                    {
-                        // Lock briefly to check if there's a matching callback
-                        let correlation_id = message
-                            .context()
-                            .map(|c| String::from_utf8_lossy(c).to_string());
-
-                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-
-                        if let Some(app_state) = guard.as_mut() {
-                            if let Some(cid) = correlation_id {
-                                if let Some(pending) = app_state.pending_callbacks.remove(&cid) {
-                                    // We only want the on_success closure here:
-                                    maybe_callback = Some(pending.on_success);
-
-                                    // Take the user_state out of the struct
-                                    let original_box =
-                                        replace(&mut app_state.user_state, Box::new(()));
-
-                                    // Try to downcast to S
-                                    if original_box.is::<S>() {
-                                        if let Ok(real_s_box) = original_box.downcast::<S>() {
-                                            let s = *real_s_box;
-                                            maybe_state = Some(s);
-                                        }
-                                    } else {
-                                        // Put back the original box since we know it's not our type
-                                        app_state.user_state = original_box;
-                                    }
-                                }
-                            }
-                        }
-                    } // lock dropped
-
-                    // (B) If we found a callback, run it outside the lock
-                    if let Some(callback_fn) = maybe_callback {
-                        if let Some(ref mut s) = maybe_state {
-                            if let Err(e) = callback_fn(message.body(), s as &mut dyn Any) {
-                                kiprintln!("Error in callback: {e}");
-                            }
-                        }
-
-                        // Put the state back & do set_state
-                        {
-                            let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                            if let Some(app_state) = guard.as_mut() {
-                                if let Some(s) = maybe_state.take() {
-                                    app_state.user_state = Box::new(s);
-                                }
-                                if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
-                                    if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
-                                        let _ = set_state(&s_bytes);
-                                    }
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    // (C) Otherwise not a callback: local or remote
-                    let mut state_opt: Option<S> = None;
-                    let mut is_local_msg = false;
-                    let mut from_http_server = false;
-
-                    // Lock to "take" the user state
-                    {
-                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                        if let Some(app_state) = guard.as_mut() {
-                            let original_box = replace(&mut app_state.user_state, Box::new(()));
-                            match original_box.downcast::<S>() {
-                                Ok(real_s_box) => {
-                                    let s = *real_s_box;
-                                    state_opt = Some(s);
-                                    is_local_msg = message.is_local();
-                                    from_http_server =
-                                        message.source().process == "http-server:distro:sys";
-                                }
-                                Err(unboxed_any) => {
-                                    // Put it back if downcast fails
-                                    app_state.user_state = unboxed_any;
-                                }
-                            }
-                        }
-                    }
-
-                    // (D) Call user handlers outside the lock
-                    if let Some(ref mut state) = state_opt {
-                        if is_local_msg {
-                            if from_http_server {
-                                http_request(
-                                    &message,
-                                    state,
-                                    &mut server,
-                                    &handle_api_call,
-                                    &handle_ws,
-                                );
-                            } else {
-                                local_request(&message, state, &mut server, &handle_local_request);
-                            }
-                        } else {
-                            remote_request(&message, state, &mut server, &handle_remote_request);
-                        }
-                    }
-
-                    // (E) Put S back and set_state
-                    {
-                        let mut guard = GLOBAL_APP_STATE.lock().unwrap();
-                        if let Some(app_state) = guard.as_mut() {
-                            if let Some(s) = state_opt.take() {
-                                app_state.user_state = Box::new(s);
-                            }
-                            if let Some(state_ref) = app_state.user_state.downcast_ref::<S>() {
-                                if let Ok(s_bytes) = rmp_serde::to_vec(state_ref) {
-                                    let _ = set_state(&s_bytes);
-                                }
-                            }
-                        }
-                    }
+                    handle_message(
+                        message,
+                        &mut user_state,
+                        &mut server,
+                        &handle_api_call,
+                        &handle_local_request,
+                        &handle_remote_request,
+                        &handle_ws,
+                    );
                 }
             }
         }
@@ -437,6 +354,47 @@ fn pretty_print_send_error(error: &SendError) {
     );
 }
 
+fn handle_send_error<S: Any + serde::Serialize>(
+    send_error: &SendError,
+    user_state: &mut S,
+) {
+    // Print the error
+    pretty_print_send_error(send_error);
+
+    // Get the correlation id
+    let Some(correlation_id) = send_error
+        .context
+        .as_ref()
+        .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+    else {
+        return;
+    };
+
+    let pending = HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        hs.as_mut().and_then(|st| st.pending_callbacks.remove(&correlation_id))
+    });
+
+
+    // Remove the pending callback
+    let Some(pending) = pending else {
+        warn!("No pending callback found for correlation id: {correlation_id}. This should never happen.");
+        return;
+    };
+
+    // Execute the timeout callback if it exists
+    if let Some(cb) = pending.on_timeout {
+        if let Err(e) = cb(user_state) {
+            kiprintln!("Error in on_timeout callback: {e}");
+        }
+    }
+
+    // Persist the state - first downcast to S
+    if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
+        let _ = set_state(&s_bytes);
+    }
+}
+
 /// Creates and exports your Kinode microservice with all standard boilerplate.
 ///
 /// **Parameters**:
@@ -498,7 +456,8 @@ macro_rules! erect {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
-                // Pass in all arguments to `app`
+                use kinode_app_common::prelude::*;
+                
                 let init_closure = $crate::app(
                     $app_name,
                     $app_icon,

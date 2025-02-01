@@ -220,19 +220,19 @@ impl SendAsyncInvocation {
                     Ok(b) => {
                         let correlation_id = ::uuid::Uuid::new_v4().to_string();
 
-                        // Insert callback into global state
-                        {
-                            let mut guard = kinode_app_common::GLOBAL_APP_STATE.lock().unwrap();
-                            if let Some(app_state) = guard.as_mut() {
-                                app_state.pending_callbacks.insert(
+                        // Insert callback into hidden state
+                        ::kinode_app_common::HIDDEN_STATE.with(|cell| {
+                            let mut hs = cell.borrow_mut();
+                            hs.as_mut().map(|state| {
+                                state.pending_callbacks.insert(
                                     correlation_id.clone(),
                                     kinode_app_common::PendingCallback {
                                         on_success: #on_success_code,
                                         on_timeout: #on_timeout_code,
                                     }
-                                );
-                            }
-                        }
+                                )
+                            });
+                        });
 
                         // Actually send
                         let _ = ::kinode_process_lib::Request::to(#dest_expr)
@@ -245,6 +245,8 @@ impl SendAsyncInvocation {
                         ::kinode_process_lib::kiprintln!("Error serializing request: {}", e);
                     }
                 }
+                // Explicitly return unit to make this a statement
+                ()
             }
         }
     }
