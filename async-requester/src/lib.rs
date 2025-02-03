@@ -7,6 +7,8 @@ use kinode_process_lib::http::StatusCode;
 use kinode_process_lib::http::server::HttpBindingConfig;
 use kinode_process_lib::http::server::WsBindingConfig;
 use kinode_process_lib::LazyLoadBlob;
+use kinode_app_common::fan_out;
+use kinode_process_lib::Address;
 
 use kinode_app_common::erect;
 use kinode_app_common::State;
@@ -35,7 +37,41 @@ wit_bindgen::generate!({
 
 fn init_fn(state: &mut ProcessState) {
     kiprintln!("Initializing Async Requester");
+    kiprintln!("Starting timer...");
     repeated_timer(state);
+
+    kiprintln!("Sleeping for 4 seconds before sending fanout...");
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    fanout_message();
+
+}
+
+fn fanout_message() {
+    let addresses: Vec<Address> = vec![
+        ("our", "async-receiver-zzz", "async-app", "uncentered.os").into(), // Doesn't exist
+        receiver_address_a(),
+        receiver_address_b(),
+        receiver_address_c(),
+        ("our", "async-receiver-zzz123", "async-app", "uncentered.os").into(), // Doesn't exist
+    ];
+
+    let requests: Vec<AsyncRequest> = vec![
+        AsyncRequest::Gather(()),
+        AsyncRequest::Gather(()),
+        AsyncRequest::Gather(()),
+        AsyncRequest::Gather(()),
+        AsyncRequest::Gather(()),
+    ];
+
+    fan_out!(
+        addresses,
+        requests,
+        (all_results, st: ProcessState) {
+            kiprintln!("fan_out done => subresponses: {:#?}", all_results);
+            st.counter += 1;
+        },
+        5
+    );
 }
 
 erect!(

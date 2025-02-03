@@ -21,24 +21,15 @@ pub fn requester_address() -> Address {
 
 declare_types! {
     // We're redundant here just so we can demo and modify if we want
-    AsyncA {
+    Async {
         StepA String => i32
         StepB i32 => u64
         StepC u64 => String
         Gather () => Result<String, String>
     },
-    AsyncB {
-        StepA String => i32
-        StepB i32 => u64
-        StepC u64 => String 
+    AsyncNoExist {
         Gather () => Result<String, String>
-    },
-    AsyncC {
-        StepA String => i32
-        StepB i32 => u64
-        StepC u64 => String
-        Gather () => Result<String, String>
-    },
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]

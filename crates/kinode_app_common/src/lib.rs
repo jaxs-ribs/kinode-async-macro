@@ -633,3 +633,89 @@ pub fn aggregator_mark_result(
         }
     });
 }
+
+#[macro_export]
+macro_rules! fan_out {
+    (
+        $addresses:expr,
+        $requests:expr,
+        ($all_results:ident, $st:ident : $st_ty:ty) $done_block:block,
+        $timeout:expr
+    ) => {{
+        use ::anyhow::{anyhow, Result as AnyResult};
+        use ::uuid::Uuid;
+        use ::serde_json;
+
+        // A unique aggregator ID for this fan-out sequence
+        let aggregator_id = Uuid::new_v4().to_string();
+        let total = $addresses.len();
+
+        // Build the aggregator that will hold partial results and run your final callback
+        let aggregator = $crate::FanOutAggregator::new(
+            total,
+            Box::new(move |results: Vec<AnyResult<serde_json::Value>>, user_state: &mut dyn std::any::Any| -> AnyResult<()> {
+                let $st = user_state
+                    .downcast_mut::<$st_ty>()
+                    .ok_or_else(|| anyhow!("Downcast failed!"))?;
+
+                let $all_results = results;
+                $done_block
+                Ok(())
+            }),
+        );
+
+        // Insert this aggregator into HIDDEN_STATE's accumulators
+        $crate::HIDDEN_STATE.with(|cell| {
+            if let Some(ref mut hidden_state) = *cell.borrow_mut() {
+                hidden_state
+                    .accumulators
+                    .insert(aggregator_id.clone(), Box::new(aggregator));
+            }
+        });
+
+        // For each address+request, serialize/send, and if there's an immediate error, mark aggregator
+        for (i, address) in $addresses.iter().enumerate() {
+            let correlation_id = format!("{}:{}", aggregator_id, i);
+
+            // Serialize request
+            let body = match serde_json::to_vec(&$requests[i]) {
+                Ok(b) => b,
+                Err(e) => {
+                    // Mark aggregator's i'th result as an error
+                    $crate::HIDDEN_STATE.with(|cell| {
+                        if let Some(ref mut hidden_st) = *cell.borrow_mut() {
+                            $crate::aggregator_mark_result(
+                                &aggregator_id,
+                                i,
+                                Err(anyhow!("Error serializing request: {}", e)),
+                                hidden_st as &mut dyn std::any::Any,
+                            );
+                        }
+                    });
+                    continue;
+                }
+            };
+
+            // Send the request - using fully qualified path
+            let send_result = kinode_process_lib::Request::to(address)
+                .body(body)
+                .expects_response($timeout)
+                .context(correlation_id.as_bytes())
+                .send();
+
+            // If the immediate send fails, also mark aggregator
+            if let Err(e) = send_result {
+                $crate::HIDDEN_STATE.with(|cell| {
+                    if let Some(ref mut hidden_st) = *cell.borrow_mut() {
+                        $crate::aggregator_mark_result(
+                            &aggregator_id,
+                            i,
+                            Err(anyhow!("Send error: {:?}", e)),
+                            hidden_st as &mut dyn std::any::Any,
+                        );
+                    }
+                });
+            }
+        }
+    }};
+}

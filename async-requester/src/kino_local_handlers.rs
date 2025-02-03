@@ -25,7 +25,7 @@ pub fn kino_local_handler(
 fn message_a() {
     send_async!(
         receiver_address_a(),
-        AsyncARequest::StepA("Mashed Potatoes".to_string()),
+        AsyncRequest::StepA("Mashed Potatoes".to_string()),
         (resp, st: ProcessState) {
             on_step_a(resp, st);
         },
@@ -38,7 +38,7 @@ fn on_step_a(response: i32, state: &mut ProcessState) {
     state.counter += 1;
     send_async!(
         receiver_address_a(),
-        AsyncARequest::StepB(response),
+        AsyncRequest::StepB(response),
         (resp, st: ProcessState) {
             let _ = on_step_b(resp, st);
         },
@@ -51,7 +51,7 @@ fn on_step_b(response: u64, state: &mut ProcessState) -> anyhow::Result<()> {
     state.counter += 1;
     send_async!(
         receiver_address_a(),
-        AsyncARequest::StepC(response),
+        AsyncRequest::StepC(response),
         (resp, st: ProcessState) {
             on_step_c(resp, st);
         },
