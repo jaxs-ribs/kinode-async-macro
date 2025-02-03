@@ -33,8 +33,9 @@ wit_bindgen::generate!({
     additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
 });
 
-fn init_fn(_state: &mut ProcessState) {
+fn init_fn(state: &mut ProcessState) {
     kiprintln!("Initializing Async Requester");
+    repeated_timer(state);
 }
 
 erect!(

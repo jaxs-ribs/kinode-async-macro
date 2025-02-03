@@ -611,7 +611,7 @@ pub fn aggregator_mark_result(
     i: usize,
     result: anyhow::Result<serde_json::Value>,
     user_state_any: &mut dyn Any,
-) {
+) { // Indentationmaxxing
     HIDDEN_STATE.with(|cell| {
         if let Some(ref mut hidden) = *cell.borrow_mut() {
             if let Some(acc_any) = hidden.accumulators.get_mut(aggregator_id) {

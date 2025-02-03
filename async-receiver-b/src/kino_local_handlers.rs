@@ -7,25 +7,28 @@ pub fn kino_local_handler(
     _message: &Message,
     _state: &mut AppState,
     _server: &mut HttpServer,
-    request: AsyncRequest,
+    request: AsyncBRequest,
 ) {
     kiprintln!("Receiver: Received request: {:?}", request);
     kiprintln!("Receiver: Sleeping for 3 seconds...");
     std::thread::sleep(std::time::Duration::from_secs(3));
 
     let response_body = match request {
-        AsyncRequest::StepA(my_string) => {
+        AsyncBRequest::StepA(my_string) => {
             kiprintln!("Receiver: Handling StepA");
-            AsyncResponse::StepA(my_string.len() as i32)
+            AsyncBResponse::StepA(my_string.len() as i32)
         }
-        AsyncRequest::StepB(i32_val) => {
+        AsyncBRequest::StepB(i32_val) => {
             kiprintln!("Receiver: Handling StepB");
-            AsyncResponse::StepB(i32_val as u64 * 2)
+            AsyncBResponse::StepB(i32_val as u64 * 2)
         }
-        AsyncRequest::StepC(u64_val) => {
+        AsyncBRequest::StepC(u64_val) => {
             kiprintln!("Receiver: Handling StepC");
-            AsyncResponse::StepC(format!("Hello from the other side C: {}", u64_val))
+            AsyncBResponse::StepC(format!("Hello from the other side C: {}", u64_val))
         }
+        AsyncBRequest::Gather(_) => {
+            AsyncBResponse::Gather(Ok("Hello from B".to_string()))
+        },
     };
 
     kiprintln!("Receiver: Sending response: {:?}", response_body);
