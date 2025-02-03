@@ -2,7 +2,6 @@ use kinode_process_lib::get_state;
 use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
-use kinode_process_lib::logging::warn;
 use kinode_process_lib::logging::Level;
 use std::any::Any;
 use std::collections::HashMap;
@@ -25,6 +24,7 @@ thread_local! {
 /// The application state containing the callback map plus the user state. This is the actual state.
 pub struct HiddenState {
     pub pending_callbacks: HashMap<String, PendingCallback>,
+    pub accumulators: HashMap<String, Box<dyn Any + Send>>,
 }
 
 pub struct PendingCallback {
@@ -32,14 +32,69 @@ pub struct PendingCallback {
     pub on_timeout: Option<Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>>,
 }
 
+pub struct FanOutAggregator<T> {
+    total: usize,
+    results: Vec<Option<Result<T, anyhow::Error>>>,
+    completed: usize,
+
+    /// Called once, when completed == total
+    on_done:
+        Box<dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send>,
+}
+
+impl<T> FanOutAggregator<T> {
+    pub fn new(
+        total: usize,
+        on_done: Box<
+            dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send,
+        >,
+    ) -> Self {
+        let mut results = Vec::with_capacity(total);
+        for _ in 0..total {
+            results.push(None);
+        }
+
+        Self {
+            total,
+            results,
+            completed: 0,
+            on_done,
+        }
+    }
+
+    pub fn set_result(&mut self, i: usize, result: Result<T, anyhow::Error>) {
+        if i < self.results.len() && self.results[i].is_none() {
+            self.results[i] = Some(result);
+            self.completed += 1;
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.completed >= self.total
+    }
+
+    /// Finalize => calls on_done(...) with the final vector
+    pub fn finalize(self, user_state: &mut dyn Any) -> anyhow::Result<()> {
+        let FanOutAggregator {
+            results, on_done, ..
+        } = self;
+        let final_vec = results
+            .into_iter()
+            .map(|item| item.unwrap_or_else(|| Err(anyhow::anyhow!("missing subresponse"))))
+            .collect();
+
+        (on_done)(final_vec, user_state)
+    }
+}
+
 impl HiddenState {
     pub fn new() -> Self {
         Self {
             pending_callbacks: HashMap::new(),
+            accumulators: HashMap::new(),
         }
     }
 }
-
 
 #[macro_export]
 macro_rules! timer {
@@ -142,11 +197,14 @@ fn handle_message<S, T1, T2, T3>(
         .context()
         .map(|c| String::from_utf8_lossy(c).to_string());
 
-    // If we found a callback, run it
     if let Some(cid) = correlation_id {
+        // --------------------------------------------------------------------------------------------
+        // Regular callback case
+        // --------------------------------------------------------------------------------------------
         let pending = HIDDEN_STATE.with(|cell| {
             let mut hs = cell.borrow_mut();
-            hs.as_mut().and_then(|state| state.pending_callbacks.remove(&cid))
+            hs.as_mut()
+                .and_then(|state| state.pending_callbacks.remove(&cid))
         });
         if let Some(pending) = pending {
             // EXECUTE the callback
@@ -159,17 +217,24 @@ fn handle_message<S, T1, T2, T3>(
             }
             return;
         }
+
+        // --------------------------------------------------------------------------------------------
+        // Fan out case
+        // --------------------------------------------------------------------------------------------
+        if let Some((agg_id, idx)) = parse_aggregator_cid(&cid) {
+            let result = match serde_json::from_slice::<serde_json::Value>(message.body()) {
+                Ok(val) => Ok(val),
+                Err(e) => Err(anyhow::anyhow!(e)),
+            };
+
+            aggregator_mark_result(&agg_id, idx, result, user_state);
+            return;
+        }
     }
 
     if message.is_local() {
         if message.source().process == "http-server:distro:sys" {
-            http_request(
-                &message,
-                user_state,
-                server,
-                handle_api_call,
-                handle_ws
-            );
+            http_request(&message, user_state, server, handle_api_call, handle_ws);
         } else {
             local_request(&message, user_state, server, handle_local_request);
         }
@@ -354,10 +419,7 @@ fn pretty_print_send_error(error: &SendError) {
     );
 }
 
-fn handle_send_error<S: Any + serde::Serialize>(
-    send_error: &SendError,
-    user_state: &mut S,
-) {
+fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, user_state: &mut S) {
     // Print the error
     pretty_print_send_error(send_error);
 
@@ -370,29 +432,45 @@ fn handle_send_error<S: Any + serde::Serialize>(
         return;
     };
 
-    let pending = HIDDEN_STATE.with(|cell| {
+    // --------------------------------------------------------------------------------------------
+    // Handle the single callback case
+    // --------------------------------------------------------------------------------------------
+    let single_callback = HIDDEN_STATE.with(|cell| {
         let mut hs = cell.borrow_mut();
-        hs.as_mut().and_then(|st| st.pending_callbacks.remove(&correlation_id))
+        hs.as_mut()
+            .and_then(|st| st.pending_callbacks.remove(&correlation_id))
     });
-
-
-    // Remove the pending callback
-    let Some(pending) = pending else {
-        warn!("No pending callback found for correlation id: {correlation_id}. This should never happen.");
-        return;
-    };
-
-    // Execute the timeout callback if it exists
-    if let Some(cb) = pending.on_timeout {
-        if let Err(e) = cb(user_state) {
-            kiprintln!("Error in on_timeout callback: {e}");
+    if let Some(single_callback) = single_callback {
+        if let Some(cb) = single_callback.on_timeout {
+            if let Err(e) = cb(user_state) {
+                kiprintln!("Error in on_timeout callback: {e}");
+            }
+            // Persist the state
+            if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
+                let _ = set_state(&s_bytes);
+            }
         }
     }
 
-    // Persist the state - first downcast to S
-    if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
-        let _ = set_state(&s_bytes);
+    // --------------------------------------------------------------------------------------------
+    // Handle the fan out case
+    // --------------------------------------------------------------------------------------------
+    if let Some((agg_id, idx)) = parse_aggregator_cid(&correlation_id) {
+        aggregator_mark_result(&agg_id, idx, Err(anyhow::anyhow!("timeout")), user_state);
+
+        if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
+            let _ = set_state(&s_bytes);
+        }
     }
+}
+
+// Parse a correlation id of the form "agg_id:idx"
+fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
+    let mut parts = corr.split(':');
+    let agg_id = parts.next()?.to_owned();
+    let idx_str = parts.next()?;
+    let idx = idx_str.parse::<usize>().ok()?;
+    Some((agg_id, idx))
 }
 
 /// Creates and exports your Kinode microservice with all standard boilerplate.
@@ -457,7 +535,7 @@ macro_rules! erect {
         impl Guest for Component {
             fn init(_our: String) {
                 use kinode_app_common::prelude::*;
-                
+
                 let init_closure = $crate::app(
                     $app_name,
                     $app_icon,
@@ -527,3 +605,117 @@ macro_rules! declare_types {
 
 // Re-export paste for use in our macros
 pub use paste;
+
+pub fn aggregator_mark_result(
+    aggregator_id: &str,
+    i: usize,
+    result: anyhow::Result<serde_json::Value>,
+    user_state_any: &mut dyn Any,
+) { // Indentationmaxxing
+    HIDDEN_STATE.with(|cell| {
+        if let Some(ref mut hidden) = *cell.borrow_mut() {
+            if let Some(acc_any) = hidden.accumulators.get_mut(aggregator_id) {
+                if let Some(agg) = acc_any.downcast_mut::<FanOutAggregator<serde_json::Value>>() {
+                    agg.set_result(i, result);
+                    if agg.is_done() {
+                        let aggregator_box = hidden.accumulators.remove(aggregator_id).unwrap();
+                        if let Ok(agg2) =
+                            aggregator_box.downcast::<FanOutAggregator<serde_json::Value>>()
+                        {
+                            let aggregator = *agg2;
+                            if let Err(e) = aggregator.finalize(user_state_any) {
+                                kiprintln!("Error finalizing aggregator: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[macro_export]
+macro_rules! fan_out {
+    (
+        $addresses:expr,
+        $requests:expr,
+        ($all_results:ident, $st:ident : $st_ty:ty) $done_block:block,
+        $timeout:expr
+    ) => {{
+        use ::anyhow::{anyhow, Result as AnyResult};
+        use ::uuid::Uuid;
+        use ::serde_json;
+
+        // A unique aggregator ID for this fan-out sequence
+        let aggregator_id = Uuid::new_v4().to_string();
+        let total = $addresses.len();
+
+        // Build the aggregator that will hold partial results and run your final callback
+        let aggregator = $crate::FanOutAggregator::new(
+            total,
+            Box::new(move |results: Vec<AnyResult<serde_json::Value>>, user_state: &mut dyn std::any::Any| -> AnyResult<()> {
+                let $st = user_state
+                    .downcast_mut::<$st_ty>()
+                    .ok_or_else(|| anyhow!("Downcast failed!"))?;
+
+                let $all_results = results;
+                $done_block
+                Ok(())
+            }),
+        );
+
+        // Insert this aggregator into HIDDEN_STATE's accumulators
+        $crate::HIDDEN_STATE.with(|cell| {
+            if let Some(ref mut hidden_state) = *cell.borrow_mut() {
+                hidden_state
+                    .accumulators
+                    .insert(aggregator_id.clone(), Box::new(aggregator));
+            }
+        });
+
+        // For each address+request, serialize/send, and if there's an immediate error, mark aggregator
+        for (i, address) in $addresses.iter().enumerate() {
+            let correlation_id = format!("{}:{}", aggregator_id, i);
+
+            // Serialize request
+            let body = match serde_json::to_vec(&$requests[i]) {
+                Ok(b) => b,
+                Err(e) => {
+                    // Mark aggregator's i'th result as an error
+                    $crate::HIDDEN_STATE.with(|cell| {
+                        if let Some(ref mut hidden_st) = *cell.borrow_mut() {
+                            $crate::aggregator_mark_result(
+                                &aggregator_id,
+                                i,
+                                Err(anyhow!("Error serializing request: {}", e)),
+                                hidden_st as &mut dyn std::any::Any,
+                            );
+                        }
+                    });
+                    continue;
+                }
+            };
+
+            // Send the request - using fully qualified path
+            let send_result = kinode_process_lib::Request::to(address)
+                .body(body)
+                .expects_response($timeout)
+                .context(correlation_id.as_bytes())
+                .send();
+
+            // If the immediate send fails, also mark aggregator
+            if let Err(e) = send_result {
+                $crate::HIDDEN_STATE.with(|cell| {
+                    if let Some(ref mut hidden_st) = *cell.borrow_mut() {
+                        $crate::aggregator_mark_result(
+                            &aggregator_id,
+                            i,
+                            Err(anyhow!("Send error: {:?}", e)),
+                            hidden_st as &mut dyn std::any::Any,
+                        );
+                    }
+                });
+            }
+        }
+    }};
+}

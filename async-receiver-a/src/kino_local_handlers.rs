@@ -26,6 +26,9 @@ pub fn kino_local_handler(
             kiprintln!("Receiver: Handling StepC");
             AsyncResponse::StepC(format!("Hello from the other side C: {}", u64_val))
         }
+        AsyncRequest::Gather(_) => {
+            AsyncResponse::Gather(Ok("Hello from A".to_string()))
+        },
     };
 
     kiprintln!("Receiver: Sending response: {:?}", response_body);

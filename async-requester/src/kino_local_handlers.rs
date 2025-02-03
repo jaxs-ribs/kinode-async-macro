@@ -4,11 +4,11 @@ use kinode_process_lib::timer::TimerAction;
 /// This will get triggered with a terminal request
 /// For example, if you run `m our@async-requester:async-app:template.os '"abc"'`
 /// Then we will message the async receiver who will sleep 3s then answer.
-fn some_function() {
+pub fn repeated_timer(state: &mut ProcessState) {
+    kiprintln!("Repeated timer called! Our counter is {}", state.counter);
     timer!(3000, (st: ProcessState) {
         st.counter += 1;
-        kiprintln!("5-second timer finished and counter is {}", st.counter);
-        some_function();
+        repeated_timer(st);
     });
 }
 
@@ -18,9 +18,11 @@ pub fn kino_local_handler(
     _server: &mut HttpServer,
     _request: String,
 ) {
-    kiprintln!("Sender: Sending message to receiver");
-    some_function();
+    // In this case, this gets called on terminal command (usually)
+    message_a();
+}
 
+fn message_a() {
     send_async!(
         receiver_address_a(),
         AsyncRequest::StepA("Mashed Potatoes".to_string()),
@@ -28,23 +30,6 @@ pub fn kino_local_handler(
             on_step_a(resp, st);
         },
     );
-
-    /*
-    Note, you can also send a timeout, and an on_timeout handler.
-
-    send_async!(
-        receiver_address(),
-        AsyncRequest::StepB("Yes hello".to_string()),
-        (resp, st: AppState) {
-            custom_handler(resp, st);
-        },
-        30,
-        on_timeout => {
-            println!("timed out!");
-            st.counter -= 1;
-        }
-    );
-     */
 }
 
 fn on_step_a(response: i32, state: &mut ProcessState) {
