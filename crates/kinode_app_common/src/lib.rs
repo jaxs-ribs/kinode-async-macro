@@ -178,19 +178,23 @@ fn setup_server(
     server
 }
 
-fn handle_message<S, T1, T2, T3>(
+fn handle_message<S, T1, T2, T3, FAPI, FLocal, FRemote, FWs>(
     message: Message,
     user_state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_api_call: &impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
-    handle_local_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
-    handle_remote_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
-    handle_ws: &impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
+    handle_api_call: Option<&FAPI>,
+    handle_local_request: Option<&FLocal>,
+    handle_remote_request: Option<&FRemote>,
+    handle_ws: Option<&FWs>,
 ) where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
     T1: serde::Serialize + serde::de::DeserializeOwned,
     T2: serde::Serialize + serde::de::DeserializeOwned,
     T3: serde::Serialize + serde::de::DeserializeOwned,
+    FAPI: Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>) + 'static,
+    FLocal: Fn(&Message, &mut S, &mut http::server::HttpServer, T2) + 'static,
+    FRemote: Fn(&Message, &mut S, &mut http::server::HttpServer, T3) + 'static,
+    FWs: Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob) + 'static,
 {
     // Get the correlation id
     let correlation_id = message
@@ -211,7 +215,7 @@ fn handle_message<S, T1, T2, T3>(
             if let Err(e) = (pending.on_success)(message.body(), user_state) {
                 kiprintln!("Error in callback: {e}");
             }
-            // Get a fresh borrow of user_state for serializing:
+            // Persist state
             if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
                 let _ = set_state(&s_bytes);
             }
@@ -226,7 +230,6 @@ fn handle_message<S, T1, T2, T3>(
                 Ok(val) => Ok(val),
                 Err(e) => Err(anyhow::anyhow!(e)),
             };
-
             aggregator_mark_result(&agg_id, idx, result, user_state);
             return;
         }
@@ -248,24 +251,29 @@ fn handle_message<S, T1, T2, T3>(
     }
 }
 
-pub fn app<S, T1, T2, T3>(
+pub fn app<S, T1, T2, T3, FAPI, FLocal, FRemote, FWs, FInit>(
     app_name: &str,
     app_icon: Option<&str>,
     app_widget: Option<&str>,
     ui_config: http::server::HttpBindingConfig,
     api_config: http::server::HttpBindingConfig,
     ws_config: http::server::WsBindingConfig,
-    handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
-    handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
-    handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
-    handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
-    init_fn: fn(&mut S),
+    handle_api_call: Option<FAPI>,
+    handle_local_request: Option<FLocal>,
+    handle_remote_request: Option<FRemote>,
+    handle_ws: Option<FWs>,
+    init_fn: Option<FInit>,
 ) -> impl Fn()
 where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
     T1: serde::Serialize + serde::de::DeserializeOwned,
     T2: serde::Serialize + serde::de::DeserializeOwned,
     T3: serde::Serialize + serde::de::DeserializeOwned,
+    FAPI: Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>) + 'static,
+    FLocal: Fn(&Message, &mut S, &mut http::server::HttpServer, T2) + 'static,
+    FRemote: Fn(&Message, &mut S, &mut http::server::HttpServer, T3) + 'static,
+    FWs: Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob) + 'static,
+    FInit: Fn(&mut S) + 'static,
 {
     HIDDEN_STATE.with(|cell| {
         let mut hs = cell.borrow_mut();
@@ -283,11 +291,8 @@ where
         let mut server = setup_server(&ui_config, &api_config, &ws_config);
         let mut user_state = initialize_state::<S>();
 
-        // Execute the user specified init function
-        // Note: It should always be called _after_ the hidden state is initialized, so that
-        // users can call macros that depend on having the callback map in the hidden state.
-        {
-            init_fn(&mut user_state);
+        if let Some(init) = &init_fn {
+            init(&mut user_state);
         }
 
         loop {
@@ -300,10 +305,10 @@ where
                         message,
                         &mut user_state,
                         &mut server,
-                        &handle_api_call,
-                        &handle_local_request,
-                        &handle_remote_request,
-                        &handle_ws,
+                        handle_api_call.as_ref(),
+                        handle_local_request.as_ref(),
+                        handle_remote_request.as_ref(),
+                        handle_ws.as_ref(),
                     );
                 }
             }
@@ -311,14 +316,16 @@ where
     }
 }
 
-fn http_request<S, T1>(
+fn http_request<S, T1, FAPI, FWs>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
-    handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
+    handle_api_call: Option<&FAPI>,
+    handle_ws: Option<&FWs>,
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
+    FAPI: Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    FWs: Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
 {
     let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
         .expect("failed to parse HTTP request");
@@ -339,30 +346,34 @@ fn http_request<S, T1>(
                 return (response.set_status(400), None);
             };
 
-            let (response, bytes) = handle_api_call(state_ref, call);
-
-            (
-                response,
-                Some(LazyLoadBlob::new(Some("application/json"), bytes)),
-            )
+            if let Some(api_fn) = handle_api_call {
+                let (resp, bytes) = api_fn(state_ref, call);
+                (resp, Some(LazyLoadBlob::new(Some("application/json"), bytes)))
+            } else {
+                // No API handler provided: return a 404-not-found response.
+                (response.set_status(404), None)
+            }
         },
         move |channel_id, msg_type, blob| {
             let state_ref: &mut S = unsafe { &mut *state_ptr };
             let server_ref: &mut http::server::HttpServer = unsafe { &mut *server_ptr };
 
-            handle_ws(state_ref, server_ref, channel_id, msg_type, blob);
+            if let Some(ws_fn) = handle_ws {
+                ws_fn(state_ref, server_ref, channel_id, msg_type, blob);
+            }
         },
     );
 }
 
-fn local_request<S, T>(
+fn local_request<S, T, FLocal>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_local_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T),
+    handle_local_request: Option<&FLocal>,
 ) where
     S: std::fmt::Debug,
     T: serde::Serialize + serde::de::DeserializeOwned,
+    FLocal: Fn(&Message, &mut S, &mut http::server::HttpServer, T),
 {
     let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
         if message.body() == b"debug" {
@@ -370,21 +381,26 @@ fn local_request<S, T>(
         }
         return;
     };
-    handle_local_request(message, state, server, request);
+    if let Some(local_fn) = handle_local_request {
+        local_fn(message, state, server, request);
+    }
 }
 
-fn remote_request<S, T>(
+fn remote_request<S, T, FRemote>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_remote_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T),
+    handle_remote_request: Option<&FRemote>,
 ) where
     T: serde::Serialize + serde::de::DeserializeOwned,
+    FRemote: Fn(&Message, &mut S, &mut http::server::HttpServer, T),
 {
     let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
         return;
     };
-    handle_remote_request(message, state, server, request);
+    if let Some(remote_fn) = handle_remote_request {
+        remote_fn(message, state, server, request);
+    }
 }
 
 /// Pretty prints a SendError in a more readable format
@@ -482,9 +498,13 @@ fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
 /// - `$ui_config`: `HttpBindingConfig` — config for the UI (pass `.default()` if not needed).
 /// - `$api_config`: `HttpBindingConfig` — config for the `/api` endpoint.
 /// - `$ws_config`: `WsBindingConfig` — config for the `/updates` path.
-/// - `$handle_api_call`, `$handle_local_request`, `$handle_remote_request`, `$handle_ws`:
-///   the 4 request-handling functions.
-/// - `$init_fn`: function `fn(&mut S)` called after setup, before the main loop.
+/// - For the following 5 callbacks, the user may either pass a bare function (which will be wrapped
+///   in a `Some(…)` automatically) or explicitly pass an `Option`: e.g. `Some(http_handler)` or `None`.
+///   - `$handle_api_call`: handles incoming API calls.
+///   - `$handle_local_request`: handles local requests.
+///   - `$handle_remote_request`: handles remote requests.
+///   - `$handle_ws`: handles WebSocket messages.
+///   - `$init_fn`: initialization function called after setup, before the main loop.
 ///
 /// **Example**:
 ///
@@ -502,18 +522,21 @@ fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
 ///     // custom logic (timers, logs, etc.)
 /// }
 ///
+/// // The following invocation shows two ways:
+/// // (1) bare function names (which become automatically Some(...))
+/// // (2) explicitly providing None or Some(wrapped_fn).
 /// erect!(
-///     "My App",
-///     Some("icon.png"),
-///     Some("widget_id"),
-///     HttpBindingConfig::default(), // config for serving UI
-///     HttpBindingConfig::default(), // config for /api
-///     WsBindingConfig::default(),   // config for /updates
-///     handle_api_call,
-///     handle_local_request,
-///     handle_remote_request,
-///     handle_ws,
-///     my_init_fn
+///     "My App",                           // App name
+///     Some("icon.png"),                   // Verbose: specifying icon as Some(...)
+///     None,                               // No widget
+///     HttpBindingConfig::default(),       // UI configuration
+///     HttpBindingConfig::default(),       // API configuration
+///     WsBindingConfig::default(),         // WebSocket configuration
+///     handle_api_call,                    // bare function => becomes Some(handle_api_call)
+///     handle_local_request,               // bare function => becomes Some(handle_local_request)
+///     None,                               // explicitly pass None for remote handler
+///     handle_ws,                         // bare function => becomes Some(handle_ws)
+///     Some(my_init_fn)                    // explicitly wrapped in Some(...)
 /// );
 /// ```
 #[macro_export]
@@ -525,17 +548,17 @@ macro_rules! erect {
         $ui_config:expr,
         $api_config:expr,
         $ws_config:expr,
-        $handle_api_call:ident,
-        $handle_local_request:ident,
-        $handle_remote_request:ident,
-        $handle_ws:ident,
-        $init_fn:ident
+        $handle_api_call:tt,
+        $handle_local_request:tt,
+        $handle_remote_request:tt,
+        $handle_ws:tt,
+        $init_fn:tt
     ) => {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
                 use kinode_app_common::prelude::*;
-
+                use kinode_app_common::maybe_option;
                 let init_closure = $crate::app(
                     $app_name,
                     $app_icon,
@@ -543,11 +566,11 @@ macro_rules! erect {
                     $ui_config,
                     $api_config,
                     $ws_config,
-                    $handle_api_call,
-                    $handle_local_request,
-                    $handle_remote_request,
-                    $handle_ws,
-                    $init_fn,
+                    maybe_option!($handle_api_call),
+                    maybe_option!($handle_local_request),
+                    maybe_option!($handle_remote_request),
+                    maybe_option!($handle_ws),
+                    maybe_option!($init_fn)
                 );
                 init_closure();
             }
@@ -718,4 +741,21 @@ macro_rules! fan_out {
             }
         }
     }};
+}
+
+/// Helper macro to wrap a callback in `Some(...)` if it isn't already an Option.
+/// If the user passes `None`, it is forwarded as-is. If the user passes `Some(...)`,
+/// it is left unchanged.
+/// Otherwise (if the user passed a bare expression), it is wrapped in `Some(...)`.
+#[macro_export]
+macro_rules! maybe_option {
+    (None) => {
+        None
+    };
+    (Some($($inner:tt)+)) => {
+        Some($($inner)+)
+    };
+    ($other:expr) => {
+        Some($other)
+    };
 }
