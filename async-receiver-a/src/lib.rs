@@ -3,8 +3,8 @@ use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
 use kinode_app_common::{erect, Binding, State};
-use kinode_process_lib::Response;
 use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
+use kinode_process_lib::Response;
 mod kino_local_handlers;
 mod structs;
 
@@ -22,20 +22,6 @@ wit_bindgen::generate!({
 fn init_fn(_state: &mut AppState) {
     kiprintln!("Initializing Async Receiver A");
 }
-
-// erect!(
-//     "Async Receiver A",
-//     None,
-//     None,
-//     HttpBindingConfig::default(),
-//     HttpBindingConfig::default(),
-//     WsBindingConfig::default(),
-//     _, // No HTTP API call
-//     kino_local_handler,
-//     _, // No remote request
-//     _, // No WS handler
-//     init_fn
-// );
 
 erect!(
     name: "Async Receiver A",

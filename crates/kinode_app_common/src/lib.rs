@@ -164,7 +164,7 @@ fn setup_server(
 
     if let Some(ui) = ui_config {
         if let Err(e) = server.serve_ui("ui", vec!["/"], ui.clone()) {
-            panic!("failed to serve UI: {e}");
+            panic!("failed to serve UI: {e}. Make sure that a ui folder is in /pkg");
         }
     }
 
@@ -501,7 +501,86 @@ macro_rules! __check_not_all_empty {
     ($($any:tt)*) => {};
 }
 
-// TODO: Zena: Generate new docs for this macro
+/// # How to Use the `erect!` Macro
+///
+/// The `erect!` macro is a powerful tool for defining and exporting a new component in your Kinode application.
+/// It allows you to bundle together the component's metadata, UI configuration, endpoints, message handlers,
+/// and initialization logic in one concise block. Below is a breakdown of each parameter:
+///
+/// - **name**:  
+///   A string literal that represents the name of the component. This name may be used for display purposes in a UI
+///   or in logging.
+///
+/// - **icon**:  
+///   An optional parameter defining the component's icon. Pass `None` if you do not wish to specify one, or use
+///   `Some(icon_identifier)` where `icon_identifier` describes your icon.
+///
+/// - **widget**:  
+///   An optional widget attachment for your component. This could be a UI fragment or identifier. Use `None` if not needed.
+///
+/// - **ui**:  
+///   An optional configuration of type `HttpBindingConfig`. This is used for setting up the UI binding for your component.
+///   For example, using `Some(HttpBindingConfig::default())` applies the default UI configuration.
+///
+/// - **endpoints**:  
+///   A list (array) of endpoints that your component will expose. Each endpoint is specified as a variant of the
+///   `Binding` enum:
+///     - `Binding::Http { path, config }`: Defines an HTTP API endpoint.  
+///       * `path`: A string representing the URL path.  
+///       * `config`: The associated HTTP binding configuration.
+///     - `Binding::Ws { path, config }`: Defines a WebSocket endpoint.  
+///       * `path`: A string representing the URL path.  
+///       * `config`: The WebSocket-specific binding configuration.
+///
+/// - **handlers**:  
+///   A block for providing callbacks to handle incoming messages. These handlers correspond to various kinds
+///   of requests:
+///     - **api**: The handler for HTTP API calls. If your component does not require an API handler, you can
+///       simply pass `_`.
+///     - **local**: The handler function for processing local (internal) requests. This must be provided if your
+///       component deals with internal messages (e.g., `kino_local_handler`).
+///     - **remote**: The handler for remote requests. If not applicable, specify `_`.
+///     - **ws**: The WebSocket message handler. Use `_` if no WebSocket handling is needed.
+///
+/// - **init**:  
+///   The initialization function that sets up the component's state when the component starts. This function should
+///   match the expected signature (taking a mutable reference to your state) and perform any necessary setup tasks.
+///
+/// **Example Usage:**
+///
+/// The following example creates a component named **"Async Requester"** with one HTTP endpoint and one WebSocket endpoint:
+///
+/// ```rust:crates/kinode_app_common/src/lib.rs
+/// erect!(
+///     name: "Async Requester",
+///     icon: None,
+///     widget: None,
+///     ui: Some(HttpBindingConfig::default()),
+///     endpoints: [
+///         Binding::Http {
+///             path: "/api",
+///             config: HttpBindingConfig::default(),
+///         },
+///         Binding::Ws {
+///             path: "/updates",
+///             config: WsBindingConfig::default(),
+///         },
+///     ],
+///     handlers: {
+///         api: _,
+///         local: kino_local_handler,
+///         remote: _,
+///         ws: _,
+///     },
+///     init: init_fn
+/// );
+/// ```
+///
+/// **Important:**  
+/// - Make sure that the signatures of your handler functions (e.g., `kino_local_handler`) and the initialization
+///   function (`init_fn`) match the expected types in the Kinode application framework.  
+/// - Specifying `_` for any handler indicates that the corresponding functionality is not implemented or needed
+///   for this component.
 #[macro_export]
 macro_rules! erect {
     (
@@ -556,48 +635,6 @@ macro_rules! erect {
         export!(Component);
     };
 }
-// #[macro_export]
-// macro_rules! erect {
-//     (
-//         $app_name:expr,
-//         $app_icon:expr,
-//         $app_widget:expr,
-//         $ui_config:expr,
-//         $api_config:expr,
-//         $ws_config:expr,
-//         $handle_api_call:tt,
-//         $handle_local_request:tt,
-//         $handle_remote_request:tt,
-//         $handle_ws:tt,
-//         $init_fn:tt
-//     ) => {
-//         // First check that not all handlers are empty
-//         $crate::__check_not_all_empty!($handle_api_call, $handle_local_request, $handle_remote_request, $handle_ws, $init_fn);
-
-//         struct Component;
-//         impl Guest for Component {
-//             fn init(_our: String) {
-//                 use kinode_app_common::prelude::*;
-
-//                 let init_closure = $crate::app(
-//                     $app_name,
-//                     $app_icon,
-//                     $app_widget,
-//                     $ui_config,
-//                     $api_config,
-//                     $ws_config,
-//                     $crate::__maybe!($handle_api_call => $crate::no_http_api_call),
-//                     $crate::__maybe!($handle_local_request => $crate::no_local_request),
-//                     $crate::__maybe!($handle_remote_request => $crate::no_remote_request),
-//                     $crate::__maybe!($handle_ws => $crate::no_ws_handler),
-//                     $crate::__maybe!($init_fn => $crate::no_init_fn),
-//                 );
-//                 init_closure();
-//             }
-//         }
-//         export!(Component);
-//     };
-// }
 
 #[doc(hidden)]
 #[macro_export]

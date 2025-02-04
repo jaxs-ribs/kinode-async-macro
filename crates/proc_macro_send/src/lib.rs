@@ -1,9 +1,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse::Parse, parse::ParseStream, parse_macro_input, Block, Expr,
-    Expr::Call as ExprCallNode, Expr::Path as ExprPathNode, ExprCall, ExprPath,
-    Ident, Result, Token, Type,
+    parse::Parse, parse::ParseStream, parse_macro_input, Block, Expr, Expr::Call as ExprCallNode,
+    Expr::Path as ExprPathNode, ExprCall, ExprPath, Ident, Result, Token, Type,
 };
 
 /// The main macro entry point
@@ -78,10 +77,7 @@ impl Parse for SendAsyncInvocation {
                     if input.peek(Token![,]) {
                         input.parse::<Token![,]>()?;
                     }
-
-                } else if input.peek(syn::LitInt)
-                    || input.peek(syn::Lit)
-                    || input.peek(syn::Ident)
+                } else if input.peek(syn::LitInt) || input.peek(syn::Lit) || input.peek(syn::Ident)
                 {
                     // Probably the timeout expression
                     if timeout.is_none() {
@@ -94,7 +90,6 @@ impl Parse for SendAsyncInvocation {
                     if input.peek(Token![,]) {
                         input.parse::<Token![,]>()?;
                     }
-
                 } else if input.peek(Ident) {
                     // Possibly `on_timeout => { ... }`
                     let ident: Ident = input.parse()?;
