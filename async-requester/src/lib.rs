@@ -6,8 +6,6 @@ use kinode_process_lib::http::server::HttpBindingConfig;
 use kinode_process_lib::http::server::WsBindingConfig;
 use kinode_app_common::fan_out;
 use kinode_process_lib::Address;
-// TODO: Zena: Needs to be abstracted into the macro
-use kinode_process_lib::timer::TimerAction;
 
 use kinode_app_common::erect;
 use kinode_app_common::State;

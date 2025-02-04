@@ -124,7 +124,7 @@ macro_rules! timer {
 
         let total_timeout_seconds = ($duration / 1000) + 1;
         let _ = kinode_process_lib::Request::to(("our", "timer", "distro", "sys"))
-            .body(TimerAction::SetTimer($duration))
+            .body(kinode_process_lib::timer::TimerAction::SetTimer($duration))
             .expects_response(total_timeout_seconds)
             .context(correlation_id.as_bytes())
             .send();
