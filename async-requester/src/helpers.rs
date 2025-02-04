@@ -1,6 +1,5 @@
 use crate::*;
 
-
 pub fn message_a() {
     send_async!(
         receiver_address_a(),

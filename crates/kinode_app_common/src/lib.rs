@@ -157,23 +157,43 @@ where
 }
 
 fn setup_server(
-    ui_config: &http::server::HttpBindingConfig,
-    api_config: &http::server::HttpBindingConfig,
-    ws_config: &http::server::WsBindingConfig,
+    ui_config: Option<&kinode_process_lib::http::server::HttpBindingConfig>,
+    endpoints: &[Binding],
 ) -> http::server::HttpServer {
     let mut server = http::server::HttpServer::new(5);
 
-    if let Err(e) = server.serve_ui("ui", vec!["/"], ui_config.clone()) {
-        panic!("failed to serve UI: {e}");
+    if let Some(ui) = ui_config {
+        if let Err(e) = server.serve_ui("ui", vec!["/"], ui.clone()) {
+            panic!("failed to serve UI: {e}. Make sure that a ui folder is in /pkg");
+        }
     }
 
-    server
-        .bind_http_path("/api", api_config.clone())
-        .expect("failed to serve API path");
+    // Verify no duplicate paths
+    let mut seen_paths = std::collections::HashSet::new();
+    for endpoint in endpoints.iter() {
+        let path = match endpoint {
+            Binding::Http { path, .. } => path,
+            Binding::Ws { path, .. } => path,
+        };
+        if !seen_paths.insert(path) {
+            panic!("duplicate path found: {}", path);
+        }
+    }
 
-    server
-        .bind_ws_path("/updates", ws_config.clone())
-        .expect("failed to bind WS path");
+    for endpoint in endpoints {
+        match endpoint {
+            Binding::Http { path, config } => {
+                server
+                    .bind_http_path(path.to_string(), config.clone())
+                    .expect("failed to serve API path");
+            }
+            Binding::Ws { path, config } => {
+                server
+                    .bind_ws_path(path.to_string(), config.clone())
+                    .expect("failed to bind WS path");
+            }
+        }
+    }
 
     server
 }
@@ -252,9 +272,8 @@ pub fn app<S, T1, T2, T3>(
     app_name: &str,
     app_icon: Option<&str>,
     app_widget: Option<&str>,
-    ui_config: http::server::HttpBindingConfig,
-    api_config: http::server::HttpBindingConfig,
-    ws_config: http::server::WsBindingConfig,
+    ui_config: Option<kinode_process_lib::http::server::HttpBindingConfig>,
+    endpoints: Vec<Binding>,
     handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
@@ -280,7 +299,7 @@ where
         init_logging(Level::DEBUG, Level::INFO, None, Some((0, 0, 1, 1)), None).unwrap();
         info!("starting app");
 
-        let mut server = setup_server(&ui_config, &api_config, &ws_config);
+        let mut server = setup_server(ui_config.as_ref(), &endpoints);
         let mut user_state = initialize_state::<S>();
 
         // Execute the user specified init function
@@ -482,86 +501,135 @@ macro_rules! __check_not_all_empty {
     ($($any:tt)*) => {};
 }
 
-/// Creates and exports your Kinode microservice with all standard boilerplate.
+/// # How to Use the `erect!` Macro
 ///
-/// **Parameters**:
-/// - `$app_name`: &str — The display name of your app.
-/// - `$app_icon`: Option<&str> — Icon path or `None`.
-/// - `$app_widget`: Option<&str> — Widget path or `None`.
-/// - `$ui_config`: `HttpBindingConfig` — config for the UI (pass `.default()` if not needed).
-/// - `$api_config`: `HttpBindingConfig` — config for the `/api` endpoint.
-/// - `$ws_config`: `WsBindingConfig` — config for the `/updates` path.
-/// - `$handle_api_call`, `$handle_local_request`, `$handle_remote_request`, `$handle_ws`:
-///   the 4 request-handling functions.
-/// - `$init_fn`: function `fn(&mut S)` called after setup, before the main loop.
+/// The `erect!` macro is a powerful tool for defining and exporting a new component in your Kinode application.
+/// It allows you to bundle together the component's metadata, UI configuration, endpoints, message handlers,
+/// and initialization logic in one concise block. Below is a breakdown of each parameter:
 ///
-/// **Example**:
+/// - **name**:  
+///   A string literal that represents the name of the component. This name may be used for display purposes in a UI
+///   or in logging.
 ///
-/// ```ignore
-/// use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
+/// - **icon**:  
+///   An optional parameter defining the component's icon. Pass `None` if you do not wish to specify one, or use
+///   `Some(icon_identifier)` where `icon_identifier` describes your icon.
 ///
-/// fn handle_api_call(state: &mut MyState, req: MyRequest) -> (HttpResponse, Vec<u8>) {
-///     // ...
-/// }
-/// fn handle_local_request(_msg: &Message, _state: &mut MyState, _srv: &mut HttpServer, _req: MyLocal) { }
-/// fn handle_remote_request(_msg: &Message, _state: &mut MyState, _srv: &mut HttpServer, _req: MyRemote) { }
-/// fn handle_ws(_state: &mut MyState, _srv: &mut HttpServer, _id: u32, _typ: WsMessageType, _blob: LazyLoadBlob) { }
+/// - **widget**:  
+///   An optional widget attachment for your component. This could be a UI fragment or identifier. Use `None` if not needed.
 ///
-/// fn my_init_fn(state: &mut MyState) {
-///     // custom logic (timers, logs, etc.)
-/// }
+/// - **ui**:  
+///   An optional configuration of type `HttpBindingConfig`. This is used for setting up the UI binding for your component.
+///   For example, using `Some(HttpBindingConfig::default())` applies the default UI configuration.
 ///
+/// - **endpoints**:  
+///   A list (array) of endpoints that your component will expose. Each endpoint is specified as a variant of the
+///   `Binding` enum:
+///     - `Binding::Http { path, config }`: Defines an HTTP API endpoint.  
+///       * `path`: A string representing the URL path.  
+///       * `config`: The associated HTTP binding configuration.
+///     - `Binding::Ws { path, config }`: Defines a WebSocket endpoint.  
+///       * `path`: A string representing the URL path.  
+///       * `config`: The WebSocket-specific binding configuration.
+///
+/// - **handlers**:  
+///   A block for providing callbacks to handle incoming messages. These handlers correspond to various kinds
+///   of requests:
+///     - **api**: The handler for HTTP API calls. If your component does not require an API handler, you can
+///       simply pass `_`.
+///     - **local**: The handler function for processing local (internal) requests. This must be provided if your
+///       component deals with internal messages (e.g., `kino_local_handler`).
+///     - **remote**: The handler for remote requests. If not applicable, specify `_`.
+///     - **ws**: The WebSocket message handler. Use `_` if no WebSocket handling is needed.
+///
+/// - **init**:  
+///   The initialization function that sets up the component's state when the component starts. This function should
+///   match the expected signature (taking a mutable reference to your state) and perform any necessary setup tasks.
+///
+/// **Example Usage:**
+///
+/// The following example creates a component named **"Async Requester"** with one HTTP endpoint and one WebSocket endpoint:
+///
+/// ```rust:crates/kinode_app_common/src/lib.rs
 /// erect!(
-///     "My App",
-///     Some("icon.png"),
-///     Some("widget_id"),
-///     HttpBindingConfig::default(), // config for serving UI
-///     HttpBindingConfig::default(), // config for /api
-///     WsBindingConfig::default(),   // config for /updates
-///     handle_api_call,
-///     handle_local_request,
-///     handle_remote_request,
-///     handle_ws,
-///     my_init_fn
+///     name: "Async Requester",
+///     icon: None,
+///     widget: None,
+///     ui: Some(HttpBindingConfig::default()),
+///     endpoints: [
+///         Binding::Http {
+///             path: "/api",
+///             config: HttpBindingConfig::default(),
+///         },
+///         Binding::Ws {
+///             path: "/updates",
+///             config: WsBindingConfig::default(),
+///         },
+///     ],
+///     handlers: {
+///         api: _,
+///         local: kino_local_handler,
+///         remote: _,
+///         ws: _,
+///     },
+///     init: init_fn
 /// );
 /// ```
+///
+/// **Important:**  
+/// - Make sure that the signatures of your handler functions (e.g., `kino_local_handler`) and the initialization
+///   function (`init_fn`) match the expected types in the Kinode application framework.  
+/// - Specifying `_` for any handler indicates that the corresponding functionality is not implemented or needed
+///   for this component.
 #[macro_export]
 macro_rules! erect {
     (
-        $app_name:expr,
-        $app_icon:expr,
-        $app_widget:expr,
-        $ui_config:expr,
-        $api_config:expr,
-        $ws_config:expr,
-        $handle_api_call:tt,
-        $handle_local_request:tt,
-        $handle_remote_request:tt,
-        $handle_ws:tt,
-        $init_fn:tt
+        name: $name:expr,
+        icon: $icon:expr,
+        widget: $widget:expr,
+        ui: $ui:expr,
+        endpoints: [ $($endpoints:expr),* $(,)? ],
+        handlers: {
+            api: $api:tt,
+            local: $local:tt,
+            remote: $remote:tt,
+            ws: $ws:tt,
+        },
+        init: $init:tt
+        $(,)?
     ) => {
-        // First check that not all handlers are empty
-        $crate::__check_not_all_empty!($handle_api_call, $handle_local_request, $handle_remote_request, $handle_ws, $init_fn);
+        $crate::__check_not_all_empty!($api, $local, $remote, $ws, $init);
+
+
 
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
                 use kinode_app_common::prelude::*;
 
-                let init_closure = $crate::app(
-                    $app_name,
-                    $app_icon,
-                    $app_widget,
-                    $ui_config,
-                    $api_config,
-                    $ws_config,
-                    $crate::__maybe!($handle_api_call => $crate::no_http_api_call),
-                    $crate::__maybe!($handle_local_request => $crate::no_local_request),
-                    $crate::__maybe!($handle_remote_request => $crate::no_remote_request),
-                    $crate::__maybe!($handle_ws => $crate::no_ws_handler),
-                    $crate::__maybe!($init_fn => $crate::no_init_fn),
+                // Map `_` to the appropriate fallback function
+                let handle_api_call = $crate::__maybe!($api => $crate::no_http_api_call);
+                let handle_local_request = $crate::__maybe!($local => $crate::no_local_request);
+                let handle_remote_request = $crate::__maybe!($remote => $crate::no_remote_request);
+                let handle_ws = $crate::__maybe!($ws => $crate::no_ws_handler);
+                let init_fn = $crate::__maybe!($init => $crate::no_init_fn);
+
+                // Build the vector of endpoints from user input
+                let endpoints_vec = vec![$($endpoints),*];
+
+                let closure = $crate::app(
+                    $name,
+                    $icon,
+                    $widget,
+                    $ui,
+                    endpoints_vec,
+                    handle_api_call,
+                    handle_local_request,
+                    handle_remote_request,
+                    handle_ws,
+                    init_fn,
                 );
-                init_closure();
+                closure();
             }
         }
         export!(Component);
@@ -623,7 +691,8 @@ pub fn aggregator_mark_result(
     i: usize,
     result: anyhow::Result<serde_json::Value>,
     user_state_any: &mut dyn Any,
-) { // Indentationmaxxing
+) {
+    // Indentationmaxxing
     HIDDEN_STATE.with(|cell| {
         if let Some(ref mut hidden) = *cell.borrow_mut() {
             if let Some(acc_any) = hidden.accumulators.get_mut(aggregator_id) {
@@ -760,10 +829,7 @@ pub fn no_ws_handler<S>(
     // does nothing
 }
 
-pub fn no_http_api_call<S>(
-    _state: &mut S,
-    _req: (),
-) -> (http::server::HttpResponse, Vec<u8>) {
+pub fn no_http_api_call<S>(_state: &mut S, _req: ()) -> (http::server::HttpResponse, Vec<u8>) {
     // trivial 200
     (http::server::HttpResponse::new(200 as u16), vec![])
 }
@@ -784,4 +850,16 @@ pub fn no_remote_request<S>(
     _req: (),
 ) {
     // does nothing
+}
+
+#[derive(Clone, Debug)]
+pub enum Binding {
+    Http {
+        path: &'static str,
+        config: kinode_process_lib::http::server::HttpBindingConfig,
+    },
+    Ws {
+        path: &'static str,
+        config: kinode_process_lib::http::server::WsBindingConfig,
+    },
 }

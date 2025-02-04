@@ -2,16 +2,12 @@ use kinode_process_lib::http::server::HttpServer;
 use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
+use kinode_app_common::{erect, fan_out, timer, Binding, State};
 use kinode_process_lib::http::server::HttpBindingConfig;
 use kinode_process_lib::http::server::WsBindingConfig;
-use kinode_app_common::fan_out;
 use kinode_process_lib::Address;
-
-use kinode_app_common::erect;
-use kinode_app_common::State;
-use shared::receiver_address_a;
-use kinode_app_common::timer;
 use proc_macro_send::send_async;
+use shared::receiver_address_a;
 
 mod helpers;
 mod structs;
@@ -47,19 +43,28 @@ pub fn kino_local_handler(
     message_a();
 }
 
-
 erect!(
-    "Async Requester",
-    None,
-    None,
-    HttpBindingConfig::default(),
-    HttpBindingConfig::default(),
-    WsBindingConfig::default(),
-    _, // No HTTP API call
-    kino_local_handler,
-    _, // No remote request
-    _, // No WS handler
-    init_fn
+    name: "Async Requester",
+    icon: None,
+    widget: None,
+    ui: Some(HttpBindingConfig::default()),
+    endpoints: [
+        Binding::Http {
+            path: "/api",
+            config: HttpBindingConfig::default(),
+        },
+        Binding::Ws {
+            path: "/updates",
+            config: WsBindingConfig::default(),
+        },
+    ],
+    handlers: {
+        api: _,
+        local: kino_local_handler,
+        remote: _,
+        ws: _,
+    },
+    init: init_fn
 );
 
 // m our@async-requester:async-app:template.os '"abc"'
