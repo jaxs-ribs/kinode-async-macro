@@ -1,41 +1,127 @@
 # 🔥🚀🤘 Kinode Processes 2.0 🔥🚀🤘
 
-Shoutout to Doria (@dr-frmr) for the [initial app idea](https://github.com/kinode-dao/app-framework/tree/main), this is just a lot of sugar on top.
+Shoutout to Doria (@dr-frmr) for the initial app idea, this is just a lot of sugar on top.
 
-## How it Works
+## Overview
 
-### Erecting Apps
+Key Macros:
+
+- `erect!` – Defines and exports your process: name, icon, HTTP/WS endpoints, handlers, and initialization logic.
+- `declare_types!` – Declares strongly typed request/response enums for your message flows.
+- `send_async!` – Sends a request with an optional callback, timeout, and on-timeout behavior.
+- `fan_out!` – Sends multiple requests in parallel and aggregates their results into a single callback.
+- `timer!` – Creates a timer that will invoke a callback after a specified duration.
+
+## Declaring and Erecting Your App
+
+The `erect!` macro is your main entry point.
 
 ```rust
+use kinode_app_common::{erect, Binding, State};
+use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
+use kinode_process_lib::{Message, kiprintln};
+
+fn init_fn(state: &mut MyState) {
+    kiprintln!("Initializing My Cool Process!");
+    // Optionally schedule timers, run initial tasks, etc.
+}
+
+/// Example local handler for messages sent within the same node
+fn my_local_handler(
+    _message: &Message,
+    _state: &mut MyState,
+    _server: &mut kinode_process_lib::http::server::HttpServer,
+    request: SomeLocalRequestType,
+) {
+    kiprintln!("Received local request: {:?}", request);
+    // ...
+}
+
 erect!(
-    "Async Receiver",
-    None,
-    None,
-    http_handler,
-    kino_local_handler,
-    kino_remote_handler
+    // The name displayed in logs or UI
+    name: "My Cool Process",
+
+    // Optional icon for a GUI environment
+    icon: Some("icon-identifier"),
+
+    // Optional widget name for embedding in a UI
+    widget: None,
+
+    // Optional HTTP config for serving a UI at path "/"
+    ui: Some(HttpBindingConfig::default()),
+
+    // HTTP/WS endpoints
+    endpoints: [
+        Binding::Http {
+            path: "/api",
+            config: HttpBindingConfig::default(),
+        },
+        Binding::Ws {
+            path: "/ws",
+            config: WsBindingConfig::default(),
+        },
+    ],
+
+    // Handlers for different message classes
+    handlers: {
+        // For HTTP API calls
+        api: my_http_handler_function,
+
+        // For local (same-node) messages
+        local: my_local_handler,
+
+        // For remote messages (from other nodes)
+        remote: _,
+
+        // For WebSocket messages
+        ws: _,
+    },
+
+    // Initialization function
+    init: init_fn
 );
 ```
 
-The `erect!` macro takes several arguments in order:
+### Handler Parameters
 
-- The name of our process
-- The Icon (Optional)
-- The Widget of the process (Optional)
-- http_handler - function that handles incoming HTTP requests
-- kino_local_handler - handles messages from processes on the same node
-- kino_remote_handler - handles messages from other nodes
+Each handler receives:
 
-### Declaring Messaging Types
+- A Message object for raw metadata.
+- A mutable reference to your State.
+- A reference to the process’s HTTP server (so you can respond or manipulate connections).
+- A typed request object, which you define (e.g., SomeLocalRequestType).
+- Use `_` if you have no need for that particular type of message. Just make sure to at least declare one handler, or the macro will crash (and your process does nothing).
 
-For instance, take this:
+## Defining State
+
+Every process has some notion of application state. You define a struct that implements the State trait:
 
 ```rust
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MyState {
+    pub counter: u64,
+}
+
+impl State for MyState {
+    fn new() -> Self {
+        Self { counter: 0 }
+    }
+}
+```
+
+## Declaring Messaging Types
+
+The declare_types! macro lets you define strongly typed request-response pairs. For example:
+
+```rust
+use kinode_app_common::declare_types;
+
 declare_types! {
     Async {
         StepA String => i32
         StepB i32 => u64
         StepC u64 => String
+        Gather () => Result<String, String>
     },
     Commodore {
         Power SomeStruct => SomeOtherStruct
@@ -44,150 +130,203 @@ declare_types! {
 }
 ```
 
-This will generate:
+This expands into something like:
 
 ```rust
-// Top level Request enum
-#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Req {
     Async(AsyncRequest),
     Commodore(CommodoreRequest),
 }
 
-// Async variant types
-#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum AsyncRequest {
     StepA(String),
     StepB(i32),
     StepC(u64),
+    Gather(()),
 }
 
-#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum AsyncResponse {
     StepA(i32),
     StepB(u64),
     StepC(String),
+    Gather(Result<String, String>),
 }
 
-// Commodore variant types
-#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum CommodoreRequest {
     Power(SomeStruct),
     Excitement(i32),
 }
 
-#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum CommodoreResponse {
     Power(SomeOtherStruct),
     Excitement(Result<String, String>),
 }
 ```
 
-This isn't just syntactic sugar, this will enforce that for each request, there is a corresponding response, and enforces naming schemes that will come in _extremely_ useful for the next macro.
+**Convention: If you define <Name>Request, the framework expects a corresponding <Name>Response. Each request variant has exactly one matching response variant, ensuring your callbacks get the right type automatically.**
 
-The naming scheme enforces these properties:
+## Async Sends
 
-- For every request variant, there is a only ONE response variant (with the same name).
-- Request enums always have the suffix `Request`, and Response enums always have the suffix `Response`.
+Once you have your request/response enums, you can easily invoke another process with send_async!. This macro:
 
-### Clean Async Sending
-
-If we have declared our messaging structs with the macro (or followed the conventions), we can easily send async messages like so:
-
-```rust
-send_async!(
-    receiver_address(),
-    AsyncRequest::StepA("Mashed Potatoes".to_string()),
-    (resp, st: AppState) {
-        on_step_a(resp, st);
-    },
-);
-```
-
-The compiler will _know_ what the value of resp is (i32 in this case).
-How cool is that???
-
-You can then chain calls, for example like this:
+- Serializes your request.
+- Sends it to the target address.
+- Registers a callback that is executed when the matching response arrives.
+- Optionally sets a timeout (in seconds).
+- Optionally runs an on_timeout block if no response is received in time.
+- Example (showing partial usage of optional timeout and callback):
 
 ```rust
-fn on_step_a(response: i32, state: &mut AppState) {
+use kinode_process_lib::Address;
+use proc_macro_send::send_async; // re-export from kinode_app_common
+
+fn message_a(state: &mut MyState) {
+    // We'll send "StepA" to the remote "Async Receiver A".
+    // If a response arrives before 20 seconds, run the callback block.
+    // If it times out, run the `on_timeout` block.
+    send_async!(
+        Address::new("our", "async-receiver-a", "async-app", "template.os"),
+        AsyncRequest::StepA("Mashed Potatoes".to_string()),
+        (resp, st: MyState) {
+            // This callback is invoked on success with the typed response
+            on_step_a(resp, st);
+        },
+        20,
+        on_timeout => {
+            kiprintln!("Request StepA timed out!");
+        }
+    );
+}
+
+fn on_step_a(response: i32, state: &mut MyState) {
     kiprintln!("Sender: Received response: {}", response);
     kiprintln!("Sender: State: {}", state.counter);
     state.counter += 1;
+
+    // Chain to Step B
     send_async!(
-        receiver_address(),
+        Address::new("our", "async-receiver-a", "async-app", "template.os"),
         AsyncRequest::StepB(response),
-        (resp, st: AppState) {
+        (resp, st: MyState) {
             on_step_b(resp, st);
         },
     );
 }
+
+fn on_step_b(response: u64, state: &mut MyState) {
+    kiprintln!("Sender: StepB response => {}", response);
+    state.counter += 1;
+    // ...
+}
 ```
 
-And then:
+## Fan-out / Aggregation
+
+Sometimes you want to send multiple requests in parallel, gather all responses, and then run a single callback. This is what the fan_out! macro does:
 
 ```rust
-fn on_step_b(response: u64, state: &mut AppState) {
-    kiprintln!("Sender: Received response: {}", response);
-    kiprintln!("Sender: State: {}", state.counter);
-    state.counter += 1;
-    send_async!(
-        receiver_address(),
-        AsyncRequest::StepC(response),
-        (resp, st: AppState) {
-            on_step_c(resp, st);
-        },
-    );
-}
+use kinode_app_common::fan_out;
+use kinode_process_lib::Address;
 
-fn on_step_c(response: String, state: &mut AppState) {
-    kiprintln!("Sender: Received response: {}", response);
-    kiprintln!("Sender: State: {}", state.counter);
-    state.counter += 1;
+fn fanout_message(state: &mut MyState) {
+    let addresses: Vec<Address> = vec![
+        Address::new("our", "async-receiver-a", "async-app", "template.os"),
+        Address::new("our", "async-receiver-b", "async-app", "template.os"),
+    ];
+
+    let requests: Vec<AsyncRequest> = vec![
+        AsyncRequest::Gather(()),
+        AsyncRequest::Gather(()),
+    ];
+
+    // We'll wait up to 5 seconds for each sub-request
+    fan_out!(
+        addresses,
+        requests,
+        (all_results, st: MyState) {
+            kiprintln!("Fan-out complete => subresponses: {:#?}", all_results);
+            st.counter += 1;
+        },
+        5
+    );
 }
 ```
 
-### Example Message Flow (yes, claude did this)
+Every request in requests is sent to the corresponding item in addresses.
+If a request times out or fails to send, it contributes an Err(...) to all_results.
+Once all requests are finished (or errored), the (all_results, st: MyState) { ... } block runs.
+
+## Timers
+
+Easily schedule recurring or one-off timers with the timer! macro. For example:
+
+```rust
+use kinode_app_common::timer;
+
+fn repeated_timer(state: &mut MyState) {
+    // Do something, e.g. log your current counter
+    kiprintln!("Timer fired! Counter = {}", state.counter);
+
+    // Maybe increment state
+    state.counter += 1;
+
+    // Schedule the next timer
+    timer!(3000, (st: MyState) {
+        // This block will run in 3 seconds
+        repeated_timer(st);
+    });
+}
+```
+
+## Example Flow
+
+My university teacher that hasn't produced anything meaningful in 25 years always told us that we should always draw diagrams. So here is a diagram.
 
 ```mermaid
 sequenceDiagram
-    participant TerminalProcess
-    participant RequesterProcess
-    participant ReceiverProcess
+    participant T as Terminal
+    participant R as Async Requester
+    participant Timer as Timer
+    participant A as Async Receiver A
+    participant B as Async Receiver B
+    participant C as Async Receiver C
+    participant X as Invalid Address
+    participant Y as Invalid Address
 
-    Note over TerminalProcess: m our@async-requester:async-app:template.os '"abc"'
-    TerminalProcess->>RequesterProcess: Terminal Command
+    %% Terminal triggers the requester (via a local handler)
+    T->>R: Terminal command ("abc")
+    Note over R: `kino_local_handler` triggers message_a()
 
-    rect rgb(70, 80, 120)
-        Note right of RequesterProcess: Step A
-        RequesterProcess->>+ReceiverProcess: AsyncRequest::StepA("Mashed Potatoes")
-        Note over ReceiverProcess: Sleep 3s
-        ReceiverProcess->>-RequesterProcess: AsyncResponse::StepA(length as i32)
-        Note over RequesterProcess: on_step_a callback
+    %% Chain of asynchronous sends (StepA -> StepB -> StepC) targeting Receiver A
+    R->>A: send AsyncRequest::StepA("Mashed Potatoes")
+    A-->>R: AsyncResponse::StepA(length)
+    R->>A: send AsyncRequest::StepB(response)
+    A-->>R: AsyncResponse::StepB(2 x response)
+    R->>A: send AsyncRequest::StepC(response)
+    A-->>R: AsyncResponse::StepC(String)
+
+    %% Repeated timer initiated in the Requester
+    Timer->>R: repeated timer tick\n(log & update counter)
+
+    %% Fan-out: Requester sends Gather requests to multiple addresses
+    Note over R: Fan-out: sending Gather requests
+    R->>A: AsyncRequest::Gather(())
+    R->>B: AsyncRequest::Gather(())
+    R->>C: AsyncRequest::Gather(())
+    R->>X: AsyncRequest::Gather(())    %% non-existent receiver
+    R->>Y: AsyncRequest::Gather(())    %% non-existent receiver
+
+    alt Aggregating Fan-Out Responses
+        A-->>R: AsyncResponse::Gather(Ok("Hello from A"))
+        B-->>R: AsyncResponse::Gather(Ok("Hello from B"))
+        C-->>R: AsyncResponse::Gather(Ok("Hello from C"))
+        X-->>R: Error/Timeout
+        Y-->>R: Error/Timeout
     end
-
-    rect rgb(70, 100, 70)
-        Note right of RequesterProcess: Step B
-        RequesterProcess->>+ReceiverProcess: AsyncRequest::StepB(response)
-        Note over ReceiverProcess: Sleep 3s
-        ReceiverProcess->>-RequesterProcess: AsyncResponse::StepB(val * 2)
-        Note over RequesterProcess: on_step_b callback
-    end
-
-    rect rgb(120, 70, 70)
-        Note right of RequesterProcess: Step C
-        RequesterProcess->>+ReceiverProcess: AsyncRequest::StepC(response)
-        Note over ReceiverProcess: Sleep 3s
-        ReceiverProcess->>-RequesterProcess: AsyncResponse::StepC("Hello from other side")
-        Note over RequesterProcess: on_step_c callback
-    end
-
-    Note over RequesterProcess: Final state.counter += 1
+    R->>R: Process aggregated results & update state
 ```
-
-### TODOs
-
-- Test test test and implement more processes.
-- Specify that a UI folder is needed if we initialize a ui, otherwise it fails silently.
-- Some features might have gotten lost since Dorias initial draft. Might have to bring a few back.
-- This will only work within rust for now. However, after using `declare_types!`, we could easily automatically generate a `.wit` file with a macro.
