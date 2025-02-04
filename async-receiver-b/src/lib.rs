@@ -1,22 +1,15 @@
-use kinode_process_lib::http::server::{HttpResponse, HttpServer};
+use kinode_process_lib::http::server::HttpServer;
 use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
 use kinode_app_common::erect;
 use kinode_app_common::State;
-use kinode_process_lib::http::server::WsMessageType;
-use kinode_process_lib::http::StatusCode;
-use kinode_process_lib::LazyLoadBlob;
 use kinode_process_lib::Response;
 use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
-mod http_handlers;
 mod kino_local_handlers;
-mod kino_remote_handlers;
 mod structs;
 
-use http_handlers::*;
 use kino_local_handlers::*;
-use kino_remote_handlers::*;
 use shared::*;
 use structs::*;
 
@@ -38,10 +31,10 @@ erect!(
     HttpBindingConfig::default(),
     HttpBindingConfig::default(),
     WsBindingConfig::default(),
-    http_handler,
+    _, // No HTTP API call
     kino_local_handler,
-    kino_remote_handler,
-    ws_handler,
+    _, // No remote request
+    _, // No WS handler
     init_fn
 );
 

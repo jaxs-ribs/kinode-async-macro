@@ -473,6 +473,15 @@ fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
     Some((agg_id, idx))
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __check_not_all_empty {
+    (_, _, _, _, _) => {
+        compile_error!("At least one handler must be defined. Cannot use '_' for all handlers.");
+    };
+    ($($any:tt)*) => {};
+}
+
 /// Creates and exports your Kinode microservice with all standard boilerplate.
 ///
 /// **Parameters**:
@@ -516,15 +525,6 @@ fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
 ///     my_init_fn
 /// );
 /// ```
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __check_not_all_empty {
-    (_, _, _, _, _) => {
-        compile_error!("At least one handler must be defined. Cannot use '_' for all handlers.");
-    };
-    ($($any:tt)*) => {};
-}
-
 #[macro_export]
 macro_rules! erect {
     (
