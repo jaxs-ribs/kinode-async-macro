@@ -516,6 +516,15 @@ fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
 ///     my_init_fn
 /// );
 /// ```
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __check_not_all_empty {
+    (_, _, _, _, _) => {
+        compile_error!("At least one handler must be defined. Cannot use '_' for all handlers.");
+    };
+    ($($any:tt)*) => {};
+}
+
 #[macro_export]
 macro_rules! erect {
     (
@@ -525,12 +534,15 @@ macro_rules! erect {
         $ui_config:expr,
         $api_config:expr,
         $ws_config:expr,
-        $handle_api_call:ident,
-        $handle_local_request:ident,
-        $handle_remote_request:ident,
-        $handle_ws:ident,
-        $init_fn:ident
+        $handle_api_call:tt,
+        $handle_local_request:tt,
+        $handle_remote_request:tt,
+        $handle_ws:tt,
+        $init_fn:tt
     ) => {
+        // First check that not all handlers are empty
+        $crate::__check_not_all_empty!($handle_api_call, $handle_local_request, $handle_remote_request, $handle_ws, $init_fn);
+
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
@@ -543,11 +555,11 @@ macro_rules! erect {
                     $ui_config,
                     $api_config,
                     $ws_config,
-                    $handle_api_call,
-                    $handle_local_request,
-                    $handle_remote_request,
-                    $handle_ws,
-                    $init_fn,
+                    $crate::__maybe!($handle_api_call => $crate::no_http_api_call),
+                    $crate::__maybe!($handle_local_request => $crate::no_local_request),
+                    $crate::__maybe!($handle_remote_request => $crate::no_remote_request),
+                    $crate::__maybe!($handle_ws => $crate::no_ws_handler),
+                    $crate::__maybe!($init_fn => $crate::no_init_fn),
                 );
                 init_closure();
             }
@@ -718,4 +730,58 @@ macro_rules! fan_out {
             }
         }
     }};
+}
+
+#[macro_export]
+macro_rules! __maybe {
+    // If the user wrote `_`, then expand to the default expression
+    ( _ => $default:expr ) => {
+        $default
+    };
+    // Otherwise use whatever they passed in
+    ( $actual:expr => $default:expr ) => {
+        $actual
+    };
+}
+
+// For demonstration, we'll define them all in one place.
+// Make sure the signatures match the real function signatures you require!
+pub fn no_init_fn<S>(_state: &mut S) {
+    // does nothing
+}
+
+pub fn no_ws_handler<S>(
+    _state: &mut S,
+    _server: &mut http::server::HttpServer,
+    _channel_id: u32,
+    _msg_type: http::server::WsMessageType,
+    _blob: LazyLoadBlob,
+) {
+    // does nothing
+}
+
+pub fn no_http_api_call<S>(
+    _state: &mut S,
+    _req: (),
+) -> (http::server::HttpResponse, Vec<u8>) {
+    // trivial 200
+    (http::server::HttpResponse::new(200 as u16), vec![])
+}
+
+pub fn no_local_request<S>(
+    _msg: &Message,
+    _state: &mut S,
+    _server: &mut http::server::HttpServer,
+    _req: (),
+) {
+    // does nothing
+}
+
+pub fn no_remote_request<S>(
+    _msg: &Message,
+    _state: &mut S,
+    _server: &mut http::server::HttpServer,
+    _req: (),
+) {
+    // does nothing
 }

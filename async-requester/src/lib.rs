@@ -81,11 +81,11 @@ erect!(
     HttpBindingConfig::default(),
     HttpBindingConfig::default(),
     WsBindingConfig::default(),
-    http_handler,
-    kino_local_handler,
-    kino_remote_handler,
-    ws_handler,
-    init_fn
+    _,
+    _,
+    _,
+    _,
+    _
 );
 
 // m our@async-requester:async-app:template.os '"abc"'
