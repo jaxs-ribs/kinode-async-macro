@@ -2,11 +2,12 @@ use kinode_process_lib::get_state;
 use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
+use kinode_process_lib::logging::warn;
 use kinode_process_lib::logging::Level;
 use std::any::Any;
 use std::collections::HashMap;
-
 use std::cell::RefCell;
+use kinode_process_lib::http::server::HttpServerRequest;
 
 use kinode_process_lib::{
     await_message, homepage, http, kiprintln, set_state, LazyLoadBlob, Message, SendError,
@@ -202,7 +203,7 @@ fn handle_message<S, T1, T2, T3>(
     message: Message,
     user_state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_api_call: &impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    handle_api_call: &impl Fn(&mut S, &str, T1),
     handle_local_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
     handle_ws: &impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
@@ -274,7 +275,7 @@ pub fn app<S, T1, T2, T3>(
     app_widget: Option<&str>,
     ui_config: Option<kinode_process_lib::http::server::HttpBindingConfig>,
     endpoints: Vec<Binding>,
-    handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    handle_api_call: impl Fn(&mut S, &str, T1),
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
     handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
@@ -334,7 +335,7 @@ fn http_request<S, T1>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_api_call: impl Fn(&mut S, T1) -> (http::server::HttpResponse, Vec<u8>),
+    handle_api_call: impl Fn(&mut S, &str, T1),
     handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
@@ -342,36 +343,41 @@ fn http_request<S, T1>(
     let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
         .expect("failed to parse HTTP request");
 
-    let state_ptr: *mut S = state;
-    let server_ptr: *mut http::server::HttpServer = server;
 
-    server.handle_request(
-        http_request,
-        move |_incoming| {
-            let state_ref: &mut S = unsafe { &mut *state_ptr };
-
-            let response = http::server::HttpResponse::new(200 as u16);
+    match http_request {
+        HttpServerRequest::Http(http_request) => {
+            let Ok(path) = http_request.path() else {
+                warn!("Failed to get path for Http, exiting, this should never happen");
+                return;
+            };
             let Some(blob) = message.blob() else {
-                return (response.set_status(400), None);
+                warn!("Failed to get blob for Http, exiting");
+                return;
             };
-            let Ok(call) = serde_json::from_slice::<T1>(blob.bytes()) else {
-                return (response.set_status(400), None);
+            let Ok(deserialized_struct) = serde_json::from_slice::<T1>(blob.bytes()) else {
+                warn!("Failed to deserialize Http request into struct, exiting");
+                return;
             };
 
-            let (response, bytes) = handle_api_call(state_ref, call);
-
-            (
-                response,
-                Some(LazyLoadBlob::new(Some("application/json"), bytes)),
-            )
-        },
-        move |channel_id, msg_type, blob| {
-            let state_ref: &mut S = unsafe { &mut *state_ptr };
-            let server_ref: &mut http::server::HttpServer = unsafe { &mut *server_ptr };
-
-            handle_ws(state_ref, server_ref, channel_id, msg_type, blob);
-        },
-    );
+            handle_api_call(state, &path, deserialized_struct);
+        }
+        HttpServerRequest::WebSocketPush {
+            channel_id,
+            message_type,
+        } => {
+            let Some(blob) = message.blob() else {
+                warn!("Failed to get blob for WebSocketPush, exiting");
+                return;
+            };
+            handle_ws(state, server, channel_id, message_type, blob)
+        }
+        HttpServerRequest::WebSocketOpen { path, channel_id } => {
+            server.handle_websocket_open(&path, channel_id);
+        }
+        HttpServerRequest::WebSocketClose(channel_id) => {
+            server.handle_websocket_close(channel_id);
+        }
+    }
 }
 
 fn local_request<S, T>(
@@ -849,9 +855,8 @@ pub fn no_ws_handler<S>(
     // does nothing
 }
 
-pub fn no_http_api_call<S>(_state: &mut S, _req: ()) -> (http::server::HttpResponse, Vec<u8>) {
-    // trivial 200
-    (http::server::HttpResponse::new(200 as u16), vec![])
+pub fn no_http_api_call<S>(_state: &mut S, _path: &str, _req: ()) {
+    // does nothing
 }
 
 pub fn no_local_request<S>(
