@@ -573,7 +573,7 @@ macro_rules! __check_not_all_empty {
 ///         },
 ///     ],
 ///     handlers: {
-///         api: _, // The handler for HTTP API calls
+///         http: _, // The handler for HTTP API calls
 ///         local: kino_local_handler, // The handler for local kinode messages
 ///         remote: _, // The handler for remote kinode messages
 ///         ws: _, // The websocket handler
@@ -598,7 +598,7 @@ macro_rules! erect {
         ui: $ui:expr,
         endpoints: [ $($endpoints:expr),* $(,)? ],
         handlers: {
-            api: $api:tt,
+            http: $http:tt,
             local: $local:tt,
             remote: $remote:tt,
             ws: $ws:tt,
@@ -620,7 +620,7 @@ macro_rules! erect {
             ],
         });
 
-        $crate::__check_not_all_empty!($api, $local, $remote, $ws, $init);
+        $crate::__check_not_all_empty!($http, $local, $remote, $ws, $init);
 
         struct Component;
         impl Guest for Component {
@@ -628,7 +628,7 @@ macro_rules! erect {
                 use kinode_app_common::prelude::*;
 
                 // Map `_` to the appropriate fallback function
-                let handle_api_call = $crate::__maybe!($api => $crate::no_http_api_call);
+                let handle_http_api_call = $crate::__maybe!($http => $crate::no_http_api_call);
                 let handle_local_request = $crate::__maybe!($local => $crate::no_local_request);
                 let handle_remote_request = $crate::__maybe!($remote => $crate::no_remote_request);
                 let handle_ws = $crate::__maybe!($ws => $crate::no_ws_handler);
@@ -643,7 +643,7 @@ macro_rules! erect {
                     $widget,
                     $ui,
                     endpoints_vec,
-                    handle_api_call,
+                    handle_http_api_call,
                     handle_local_request,
                     handle_remote_request,
                     handle_ws,

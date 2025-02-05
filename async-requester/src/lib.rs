@@ -47,7 +47,7 @@ erect!(
         },
     ],
     handlers: {
-        api: _,
+        http: _,
         local: kino_local_handler,
         remote: _,
         ws: _,
