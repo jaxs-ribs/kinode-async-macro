@@ -3,7 +3,7 @@ use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
 use kinode_app_common::{erect, Binding, State};
-use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
+use kinode_process_lib::http::server::HttpBindingConfig;
 use kinode_process_lib::Response;
 mod kino_local_handlers;
 mod structs;
@@ -11,13 +11,6 @@ mod structs;
 use kino_local_handlers::*;
 use shared::*;
 use structs::*;
-
-wit_bindgen::generate!({
-    path: "target/wit",
-    world: "async-app-template-dot-os-v0",
-    generate_unused_types: true,
-    additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
-});
 
 fn init_fn(_state: &mut AppState) {
     kiprintln!("Initializing Async Receiver A");
@@ -33,16 +26,13 @@ erect!(
             path: "/api",
             config: HttpBindingConfig::default(),
         },
-        Binding::Ws {
-            path: "/updates",
-            config: WsBindingConfig::default(),
-        },
     ],
     handlers: {
-        api: _,
+        http: _,
         local: kino_local_handler,
         remote: _,
         ws: _,
     },
-    init: init_fn
+    init: init_fn,
+    wit_world: "async-app-template-dot-os-v0"
 );

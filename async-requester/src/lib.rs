@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use kinode_app_common::{erect, fan_out, timer, Binding, State};
 use kinode_process_lib::http::server::HttpBindingConfig;
-use kinode_process_lib::http::server::WsBindingConfig;
 use kinode_process_lib::Address;
 use proc_macro_send::send_async;
+use serde_json::Value;
 use shared::receiver_address_a;
 
 mod helpers;
@@ -15,13 +15,6 @@ mod structs;
 use helpers::*;
 use shared::*;
 use structs::*;
-
-wit_bindgen::generate!({
-    path: "target/wit",
-    world: "async-app-template-dot-os-v0",
-    generate_unused_types: true,
-    additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
-});
 
 fn init_fn(state: &mut ProcessState) {
     kiprintln!("Initializing Async Requester");
@@ -43,6 +36,15 @@ pub fn kino_local_handler(
     message_a();
 }
 
+fn http_handler(
+    _state: &mut ProcessState,
+    path: &str,
+    req: Value,
+) {
+    kiprintln!("Received HTTP request: {:#?}", req);
+    kiprintln!("Path is {:#?}", path);
+}
+
 erect!(
     name: "Async Requester",
     icon: None,
@@ -51,20 +53,20 @@ erect!(
     endpoints: [
         Binding::Http {
             path: "/api",
-            config: HttpBindingConfig::default(),
-        },
-        Binding::Ws {
-            path: "/updates",
-            config: WsBindingConfig::default(),
+            config: HttpBindingConfig::new(false, false, false, None),
         },
     ],
     handlers: {
-        api: _,
+        http: http_handler,
         local: kino_local_handler,
         remote: _,
         ws: _,
     },
-    init: init_fn
+    init: init_fn,
+    wit_world: "async-app-template-dot-os-v0"
 );
 
-// m our@async-requester:async-app:template.os '"abc"'
+/*
+m our@async-requester:async-app:template.os '"abc"'
+curl -X POST -H "Content-Type: application/json" -d '{"message": "hello world"}' http://localhost:8080/async-requester:async-app:uncentered.os/api
+*/
