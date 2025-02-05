@@ -355,7 +355,9 @@ fn http_request<S, T1>(
                 return;
             };
             let Ok(deserialized_struct) = serde_json::from_slice::<T1>(blob.bytes()) else {
-                warn!("Failed to deserialize Http request into struct, exiting");
+                let body_str = String::from_utf8_lossy(blob.bytes());
+                warn!("Raw request body was: {:#?}", body_str);
+                warn!("Failed to deserialize into type parameter T1 (type: {}), check that the request body matches this type's structure", std::any::type_name::<T1>());
                 return;
             };
 
