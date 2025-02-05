@@ -394,6 +394,10 @@ fn local_request<S, T>(
     let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
         if message.body() == b"debug" {
             kiprintln!("state:\n{:#?}", state);
+        } else {
+            warn!("Failed to deserialize local request into struct, exiting");
+            let body_str = String::from_utf8_lossy(message.body());
+            warn!("Raw request body was: {:#?}", body_str);
         }
         return;
     };
@@ -409,6 +413,9 @@ fn remote_request<S, T>(
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
     let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
+        warn!("Failed to deserialize remote request into struct, exiting");
+        let body_str = String::from_utf8_lossy(message.body());
+        warn!("Raw request body was: {:#?}", body_str);
         return;
     };
     handle_remote_request(message, state, server, request);
