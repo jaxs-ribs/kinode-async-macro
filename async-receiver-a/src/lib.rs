@@ -12,13 +12,6 @@ use kino_local_handlers::*;
 use shared::*;
 use structs::*;
 
-wit_bindgen::generate!({
-    path: "target/wit",
-    world: "async-app-template-dot-os-v0",
-    generate_unused_types: true,
-    additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
-});
-
 fn init_fn(_state: &mut AppState) {
     kiprintln!("Initializing Async Receiver A");
 }
@@ -33,10 +26,6 @@ erect!(
             path: "/api",
             config: HttpBindingConfig::default(),
         },
-        Binding::Ws {
-            path: "/updates",
-            config: WsBindingConfig::default(),
-        },
     ],
     handlers: {
         api: _,
@@ -44,5 +33,6 @@ erect!(
         remote: _,
         ws: _,
     },
-    init: init_fn
+    init: init_fn,
+    wit_world: "async-app-template-dot-os-v0"
 );

@@ -546,6 +546,12 @@ macro_rules! __check_not_all_empty {
 ///   The initialization function that sets up the component's state when the component starts. This function should
 ///   match the expected signature (taking a mutable reference to your state) and perform any necessary setup tasks.
 ///
+/// - **wit_world**:  
+///   The name of the WIT world file to generate. This should match the name of the WIT file in the `target/wit` directory.
+///
+/// - **additional_derives**:  
+///   Additional derives to add to the generated code. Mostly not needed.
+///
 /// **Example Usage:**
 ///
 /// The following example creates a component named **"Async Requester"** with one HTTP endpoint and one WebSocket endpoint:
@@ -567,12 +573,14 @@ macro_rules! __check_not_all_empty {
 ///         },
 ///     ],
 ///     handlers: {
-///         api: _,
-///         local: kino_local_handler,
-///         remote: _,
-///         ws: _,
+///         api: _, // The handler for HTTP API calls
+///         local: kino_local_handler, // The handler for local kinode messages
+///         remote: _, // The handler for remote kinode messages
+///         ws: _, // The websocket handler
 ///     },
-///     init: init_fn
+///     init: init_fn, // The init function that will get run first
+///     wit_world: "async-app-template-dot-os-v0", // Your wit file name
+///     additional_derives: [Debug, Clone] // Mostly not needed
 /// );
 /// ```
 ///
@@ -595,12 +603,24 @@ macro_rules! erect {
             remote: $remote:tt,
             ws: $ws:tt,
         },
-        init: $init:tt
+        init: $init:tt,
+        wit_world: $wit_world:expr
+        $(, additional_derives: [ $($additional_derives:path),* $(,)? ] )?
         $(,)?
     ) => {
+        wit_bindgen::generate!({
+            path: "target/wit",
+            world: $wit_world,
+            generate_unused_types: true,
+            additional_derives: [
+                serde::Deserialize,
+                serde::Serialize,
+                process_macros::SerdeJsonInto,
+                $($($additional_derives,)*)?
+            ],
+        });
+
         $crate::__check_not_all_empty!($api, $local, $remote, $ws, $init);
-
-
 
         struct Component;
         impl Guest for Component {
