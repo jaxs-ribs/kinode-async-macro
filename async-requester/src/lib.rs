@@ -35,6 +35,14 @@ pub fn kino_local_handler(
     message_a();
 }
 
+fn http_handler(
+    _state: &mut ProcessState,
+    _path: &str,
+    _request: String,
+) {
+    kiprintln!("Received HTTP request: {}", _request);
+}
+
 erect!(
     name: "Async Requester",
     icon: None,
@@ -47,7 +55,7 @@ erect!(
         },
     ],
     handlers: {
-        http: _,
+        http: http_handler,
         local: kino_local_handler,
         remote: _,
         ws: _,
