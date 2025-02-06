@@ -247,52 +247,69 @@ impl SendAsyncInvocation {
     }
 }
 
-/// Extract the final variant name from e.g. `SomeRequest::Foo(...)`.
+/// Extract the final variant name from e.g. `SomeRequest::Foo(...)` or `SomeRequest::Foo`.
 fn extract_variant_name(expr: &Expr) -> Option<Ident> {
-    if let ExprCallNode(ExprCall { func, .. }) = expr {
-        if let ExprPathNode(ExprPath { path, .. }) = &**func {
-            if let Some(seg) = path.segments.last() {
-                return Some(seg.ident.clone());
+    match expr {
+        // Handle call-style variants: SomeRequest::Foo(...)
+        ExprCallNode(ExprCall { func, .. }) => {
+            if let ExprPathNode(ExprPath { path, .. }) = &**func {
+                path.segments.last().map(|seg| seg.ident.clone())
+            } else {
+                None
             }
         }
+        // Handle unit variants: SomeRequest::Foo
+        ExprPathNode(ExprPath { path, .. }) => {
+            path.segments.last().map(|seg| seg.ident.clone())
+        }
+        _ => None,
     }
-    None
 }
 
 /// Build a "response path" by rewriting `XyzRequest -> XyzResponse`.
 fn build_response_path(expr: &Expr) -> proc_macro2::TokenStream {
-    if let ExprCallNode(ExprCall { func, .. }) = expr {
-        if let ExprPathNode(ExprPath { path, .. }) = &**func {
-            let segments = &path.segments;
-            if segments.len() < 2 {
-                return quote! { UNKNOWN_RESPONSE };
-            }
-            let enum_seg = &segments[segments.len() - 2];
-
-            // Convert e.g. "FooRequest" => "FooResponse"
-            let old_ident_str = enum_seg.ident.to_string();
-            let new_ident_str = if let Some(base) = old_ident_str.strip_suffix("Request") {
-                format!("{}Response", base)
+    let path = match expr {
+        // Handle call-style variants: SomeRequest::Foo(...)
+        ExprCallNode(ExprCall { func, .. }) => {
+            if let ExprPathNode(ExprPath { path, .. }) = &**func {
+                path
             } else {
-                format!("{}Response", old_ident_str)
-            };
-            let new_ident = syn::Ident::new(&new_ident_str, enum_seg.ident.span());
-
-            // Rebuild the path
-            let mut new_segments = syn::punctuated::Punctuated::new();
-            for i in 0..segments.len() - 2 {
-                new_segments.push(segments[i].clone());
+                return quote! { compile_error!("Expected path expression") };
             }
-            let mut replaced_seg = enum_seg.clone();
-            replaced_seg.ident = new_ident;
-            new_segments.push(replaced_seg);
-
-            let new_path = syn::Path {
-                leading_colon: path.leading_colon,
-                segments: new_segments,
-            };
-            return quote! { #new_path };
         }
+        // Handle unit variants: SomeRequest::Foo
+        ExprPathNode(ExprPath { path, .. }) => path,
+        _ => return quote! { compile_error!("Expected path or call expression") },
+    };
+
+    let segments = &path.segments;
+    if segments.len() < 2 {
+        return quote! { compile_error!("Invalid request type: expected path with at least two segments") };
     }
-    quote! { UNKNOWN_RESPONSE }
+
+    let enum_seg = &segments[segments.len() - 2];
+
+    // Convert e.g. "FooRequest" => "FooResponse"
+    let old_ident_str = enum_seg.ident.to_string();
+    let new_ident_str = if let Some(base) = old_ident_str.strip_suffix("Request") {
+        format!("{}Response", base)
+    } else {
+        format!("{}Response", old_ident_str)
+    };
+    let new_ident = syn::Ident::new(&new_ident_str, enum_seg.ident.span());
+
+    // Rebuild the path
+    let mut new_segments = syn::punctuated::Punctuated::new();
+    for i in 0..segments.len() - 2 {
+        new_segments.push(segments[i].clone());
+    }
+    let mut replaced_seg = enum_seg.clone();
+    replaced_seg.ident = new_ident;
+    new_segments.push(replaced_seg);
+
+    let new_path = syn::Path {
+        leading_colon: path.leading_colon,
+        segments: new_segments,
+    };
+    quote! { #new_path }
 }
