@@ -1,5 +1,7 @@
 use kinode_process_lib::get_state;
+use kinode_process_lib::http::server::send_response;
 use kinode_process_lib::http::server::WsMessageType;
+use kinode_process_lib::http::StatusCode;
 use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
 use kinode_process_lib::logging::warn;
@@ -343,21 +345,24 @@ fn http_request<S, T1>(
     let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
         .expect("failed to parse HTTP request");
 
-
     match http_request {
         HttpServerRequest::Http(http_request) => {
+
             let Ok(path) = http_request.path() else {
                 warn!("Failed to get path for Http, exiting, this should never happen");
+                send_response(StatusCode::BAD_REQUEST, None, vec![]);
                 return;
             };
             let Some(blob) = message.blob() else {
                 warn!("Failed to get blob for Http, exiting");
+                send_response(StatusCode::BAD_REQUEST, None, vec![]);
                 return;
             };
             let Ok(deserialized_struct) = serde_json::from_slice::<T1>(blob.bytes()) else {
                 let body_str = String::from_utf8_lossy(blob.bytes());
                 warn!("Raw request body was: {:#?}", body_str);
                 warn!("Failed to deserialize into type parameter T1 (type: {}), check that the request body matches this type's structure", std::any::type_name::<T1>());
+                send_response(StatusCode::BAD_REQUEST, None, vec![]);
                 return;
             };
 
