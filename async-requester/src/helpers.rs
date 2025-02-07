@@ -4,7 +4,7 @@ pub fn message_a() {
     send_async!(
         receiver_address_a(),
         AsyncRequest::StepA("Mashed Potatoes".to_string()),
-        (resp, st: ProcessState) {
+        (resp: i32, st: ProcessState) {
             on_step_a(resp, st);
         },
     );
@@ -17,7 +17,7 @@ pub fn on_step_a(response: i32, state: &mut ProcessState) {
     send_async!(
         receiver_address_a(),
         AsyncRequest::StepB(response),
-        (resp, st: ProcessState) {
+        (resp: u64, st: ProcessState) {
             let _ = on_step_b(resp, st);
         },
     );
@@ -30,7 +30,7 @@ pub fn on_step_b(response: u64, state: &mut ProcessState) -> anyhow::Result<()> 
     send_async!(
         receiver_address_a(),
         AsyncRequest::StepC(response),
-        (resp, st: ProcessState) {
+        (resp: String, st: ProcessState) {
             on_step_c(resp, st);
         },
     );

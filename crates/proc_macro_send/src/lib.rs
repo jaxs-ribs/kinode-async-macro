@@ -27,9 +27,10 @@ struct SendAsyncInvocation {
     on_timeout_block: Option<Block>,
 }
 
-/// Holds the pieces of `(resp_ident, st_ident: st_type) { callback_block }`.
+/// Holds the pieces of `(resp_ident: resp_type, st_ident: st_type) { callback_block }`.
 struct Callback {
     resp_ident: Ident,
+    resp_type: Type,
     st_ident: Ident,
     st_type: Type,
     callback_block: Block,
@@ -53,11 +54,13 @@ impl Parse for SendAsyncInvocation {
             input.parse::<Token![,]>()?;
 
             while !input.is_empty() {
-                // If we see `(` => parse (resp, st: MyState) { ... }
+                // If we see `(` => parse (resp: RespType, st: MyState) { ... }
                 if input.peek(syn::token::Paren) {
                     let content;
                     syn::parenthesized!(content in input);
                     let resp_ident: Ident = content.parse()?;
+                    content.parse::<Token![:]>()?;
+                    let resp_type: Type = content.parse()?;
                     content.parse::<Token![,]>()?;
                     let st_ident: Ident = content.parse()?;
                     content.parse::<Token![:]>()?;
@@ -68,6 +71,7 @@ impl Parse for SendAsyncInvocation {
 
                     callback = Some(Callback {
                         resp_ident,
+                        resp_type,
                         st_ident,
                         st_type,
                         callback_block,
@@ -162,6 +166,7 @@ impl SendAsyncInvocation {
             Some(cb) => {
                 let Callback {
                     resp_ident,
+                    resp_type,
                     st_ident,
                     st_type,
                     callback_block,
@@ -172,7 +177,7 @@ impl SendAsyncInvocation {
                         let parsed = ::serde_json::from_slice::<#response_path>(resp_bytes)
                             .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))?;
 
-                        let #resp_ident = match parsed {
+                        let inner = match parsed {
                             #success_arm,
                             other => {
                                 return Err(anyhow::anyhow!(
@@ -182,6 +187,9 @@ impl SendAsyncInvocation {
                                 ));
                             }
                         };
+
+                        // Add type assertion to ensure user-specified type matches
+                        let #resp_ident: #resp_type = inner;
 
                         let #st_ident = any_state
                             .downcast_mut::<#st_type>()
