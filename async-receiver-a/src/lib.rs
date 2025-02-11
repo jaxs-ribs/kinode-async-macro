@@ -2,7 +2,7 @@ use kinode_process_lib::http::server::HttpServer;
 use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{erect, Binding, State};
+use kinode_app_common::{erect, Binding, State, SaveOptions};
 use kinode_process_lib::http::server::HttpBindingConfig;
 use kinode_process_lib::Response;
 mod kino_local_handlers;
@@ -27,6 +27,7 @@ erect!(
             config: HttpBindingConfig::default(),
         },
     ],
+    save_config: SaveOptions::EveryMessage,
     handlers: {
         http: _,
         local: kino_local_handler,

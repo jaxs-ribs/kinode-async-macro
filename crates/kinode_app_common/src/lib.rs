@@ -590,6 +590,13 @@ macro_rules! __check_not_all_empty {
 ///       * `path`: A string representing the URL path.  
 ///       * `config`: The WebSocket-specific binding configuration.
 ///
+/// - **save_config**:  
+///   The save configuration for the component. This determines how often the state should be saved.
+///   Available options are:
+///   - `SaveOptions::Never`: State is never automatically saved
+///   - `SaveOptions::EveryNSeconds(n)`: State is saved every n seconds
+///   - `SaveOptions::OnChange`: State is saved after every modification
+///
 /// - **handlers**:  
 ///   A block for providing callbacks to handle incoming messages. These handlers correspond to various kinds
 ///   of requests:
@@ -630,6 +637,7 @@ macro_rules! __check_not_all_empty {
 ///             config: WsBindingConfig::default(),
 ///         },
 ///     ],
+///     save_config: SaveOptions::EveryNSeconds(10),
 ///     handlers: {
 ///         http: _, // The handler for HTTP API calls
 ///         local: kino_local_handler, // The handler for local kinode messages
@@ -655,6 +663,7 @@ macro_rules! erect {
         widget: $widget:expr,
         ui: $ui:expr,
         endpoints: [ $($endpoints:expr),* $(,)? ],
+        save_config: $save_config:expr,
         handlers: {
             http: $http:tt,
             local: $local:tt,
@@ -701,6 +710,7 @@ macro_rules! erect {
                     $widget,
                     $ui,
                     endpoints_vec,
+                    $save_config,
                     handle_http_api_call,
                     handle_local_request,
                     handle_remote_request,
@@ -963,6 +973,8 @@ where
                             if let Some(ref mut hidden_state) = *hs {
                                 if let SaveOptions::EveryNSeconds(secs) = hidden_state.save_config {
                                     hidden_state.timer_active = false;
+                                    // I am not sure what the
+                                    kiprintln!("Setting up next timer for {} seconds", secs);
                                     setup_periodic_save_timer::<S>(secs);
                                 }
                             }
@@ -983,10 +995,10 @@ where
         if let Some(ref mut hidden_state) = *hs {
             if hidden_state.should_save_state() {
                 if let Ok(s_bytes) = rmp_serde::to_vec(state) {
+                    kiprintln!("State persisted");
                     let _ = set_state(&s_bytes);
                 }
             }
         }
     });
 }
-
