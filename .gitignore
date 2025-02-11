@@ -8,5 +8,6 @@ pkg/*.zip
 */wit/
 */process_env
 **/target/
-
+.DS_Store
+**/.DS_Store
 
