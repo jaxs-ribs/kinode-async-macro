@@ -268,10 +268,6 @@ fn handle_message<S, T1, T2, T3>(
             if let Err(e) = (pending.on_success)(message.body(), user_state) {
                 kiprintln!("Error in callback: {e}");
             }
-            // Get a fresh borrow of user_state for serializing:
-            if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
-                let _ = set_state(&s_bytes);
-            }
             return;
         }
 
@@ -522,10 +518,6 @@ fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, user_sta
             if let Err(e) = cb(user_state) {
                 kiprintln!("Error in on_timeout callback: {e}");
             }
-            // Persist the state
-            if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
-                let _ = set_state(&s_bytes);
-            }
         }
     }
 
@@ -534,10 +526,6 @@ fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, user_sta
     // --------------------------------------------------------------------------------------------
     if let Some((agg_id, idx)) = parse_aggregator_cid(&correlation_id) {
         aggregator_mark_result(&agg_id, idx, Err(anyhow::anyhow!("timeout")), user_state);
-
-        if let Ok(s_bytes) = rmp_serde::to_vec(&user_state) {
-            let _ = set_state(&s_bytes);
-        }
     }
 }
 
