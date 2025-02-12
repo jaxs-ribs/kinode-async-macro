@@ -330,3 +330,31 @@ sequenceDiagram
     end
     R->>R: Process aggregated results & update state
 ```
+
+## Save Options
+
+The `SaveOptions` enum allows you to configure how your process's state is persisted:
+
+```rust
+use kinode_app_common::SaveOptions;
+
+erect!(
+    // ... other config ...
+    
+    // Configure state persistence
+    save_config: SaveOptions::EveryNSeconds(300), // Save every 5 minutes
+    
+    // ... rest of config ...
+);
+```
+
+The available options are:
+
+- `SaveOptions::Never` - State is never automatically persisted
+- `SaveOptions::EveryMessage` - State is persisted after every message
+- `SaveOptions::EveryNMessage(n)` - State is persisted every N messages
+- `SaveOptions::EveryNSeconds(n)` - State is persisted every N seconds
+
+State is automatically loaded on process start if a saved state file exists. The save options allow you to balance between data safety and performance by controlling how frequently state is persisted to disk.
+
+**Note**: When using `EveryNSeconds`, a timer is automatically set up to handle the periodic saves. For the other options, saves are handled as messages are processed.

@@ -2,7 +2,7 @@ use kinode_process_lib::http::server::HttpServer;
 use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{erect, fan_out, timer, Binding, State};
+use kinode_app_common::{erect, fan_out, timer, Binding, State, SaveOptions};
 use kinode_process_lib::http::server::HttpBindingConfig;
 use kinode_process_lib::Address;
 use proc_macro_send::send_async;
@@ -44,7 +44,6 @@ fn http_handler(
     kiprintln!("Received HTTP request: {:#?}", req);
     kiprintln!("Path is {:#?}", path);
 }
-
 erect!(
     name: "Async Requester",
     icon: None,
@@ -56,6 +55,7 @@ erect!(
             config: HttpBindingConfig::new(false, false, false, None),
         },
     ],
+    save_config: SaveOptions::EveryMessage,
     handlers: {
         http: http_handler,
         local: kino_local_handler,

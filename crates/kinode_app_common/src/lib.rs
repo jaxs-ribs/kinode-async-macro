@@ -23,11 +23,25 @@ pub mod prelude {
 thread_local! {
     pub static HIDDEN_STATE: RefCell<Option<HiddenState>> = RefCell::new(None);
 }
-
+// Enum defining the state persistance behaviour
+#[derive(Clone)]
+pub enum SaveOptions {
+    // Never Persist State
+    Never,
+    // Persist State Every Message
+    EveryMessage,
+    // Persist State Every N Messages
+    EveryNMessage(u64),
+    // Persist State Every N Seconds
+    EveryNSeconds(u64),
+}
 /// The application state containing the callback map plus the user state. This is the actual state.
 pub struct HiddenState {
     pub pending_callbacks: HashMap<String, PendingCallback>,
     pub accumulators: HashMap<String, Box<dyn Any + Send>>,
+    save_config: SaveOptions,
+    message_count: u64,
+    timer_active: bool,
 }
 
 pub struct PendingCallback {
@@ -91,10 +105,30 @@ impl<T> FanOutAggregator<T> {
 }
 
 impl HiddenState {
-    pub fn new() -> Self {
+    pub fn new(save_config: SaveOptions) -> Self {
         Self {
             pending_callbacks: HashMap::new(),
             accumulators: HashMap::new(),
+            save_config,
+            message_count: 0,
+            timer_active: false,
+        }
+    }
+
+    fn should_save_state(&mut self) -> bool {
+        match self.save_config {
+            SaveOptions::Never => false,
+            SaveOptions::EveryMessage => true,
+            SaveOptions::EveryNMessage(n) => {
+                self.message_count += 1;
+                if self.message_count >= n {
+                    self.message_count = 0;
+                    true
+                } else {
+                    false
+                }
+            }
+            SaveOptions::EveryNSeconds(_) => false, // Handled by timer instead
         }
     }
 }
@@ -265,10 +299,8 @@ fn handle_message<S, T1, T2, T3>(
         remote_request(&message, user_state, server, handle_remote_request);
     }
 
-    // Persist the state with a new temporary borrow.
-    if let Ok(s_bytes) = rmp_serde::to_vec(user_state) {
-        let _ = set_state(&s_bytes);
-    }
+    // Try to save state based on configuration
+    maybe_save_state(user_state);
 }
 
 pub fn app<S, T1, T2, T3>(
@@ -277,6 +309,7 @@ pub fn app<S, T1, T2, T3>(
     app_widget: Option<&str>,
     ui_config: Option<kinode_process_lib::http::server::HttpBindingConfig>,
     endpoints: Vec<Binding>,
+    save_config: SaveOptions,
     handle_api_call: impl Fn(&mut S, &str, T1),
     handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
     handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
@@ -291,11 +324,16 @@ where
 {
     HIDDEN_STATE.with(|cell| {
         let mut hs = cell.borrow_mut();
-        *hs = Some(HiddenState::new());
+        *hs = Some(HiddenState::new(save_config.clone()));
     });
 
     if app_icon.is_some() && app_widget.is_some() {
         homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
+    }
+
+    // Set up timer if needed
+    if let SaveOptions::EveryNSeconds(seconds) = save_config {
+        setup_periodic_save_timer::<S>(seconds);
     }
 
     move || {
@@ -552,6 +590,13 @@ macro_rules! __check_not_all_empty {
 ///       * `path`: A string representing the URL path.  
 ///       * `config`: The WebSocket-specific binding configuration.
 ///
+/// - **save_config**:  
+///   The save configuration for the component. This determines how often the state should be saved.
+///   Available options are:
+///   - `SaveOptions::Never`: State is never automatically saved
+///   - `SaveOptions::EveryNSeconds(n)`: State is saved every n seconds
+///   - `SaveOptions::OnChange`: State is saved after every modification
+///
 /// - **handlers**:  
 ///   A block for providing callbacks to handle incoming messages. These handlers correspond to various kinds
 ///   of requests:
@@ -592,6 +637,7 @@ macro_rules! __check_not_all_empty {
 ///             config: WsBindingConfig::default(),
 ///         },
 ///     ],
+///     save_config: SaveOptions::EveryNSeconds(10),
 ///     handlers: {
 ///         http: _, // The handler for HTTP API calls
 ///         local: kino_local_handler, // The handler for local kinode messages
@@ -617,6 +663,7 @@ macro_rules! erect {
         widget: $widget:expr,
         ui: $ui:expr,
         endpoints: [ $($endpoints:expr),* $(,)? ],
+        save_config: $save_config:expr,
         handlers: {
             http: $http:tt,
             local: $local:tt,
@@ -663,6 +710,7 @@ macro_rules! erect {
                     $widget,
                     $ui,
                     endpoints_vec,
+                    $save_config,
                     handle_http_api_call,
                     handle_local_request,
                     handle_remote_request,
@@ -901,4 +949,56 @@ pub enum Binding {
         path: &'static str,
         config: kinode_process_lib::http::server::WsBindingConfig,
     },
+}
+fn setup_periodic_save_timer<S>(seconds: u64) 
+where
+    S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+{
+    HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        if let Some(ref mut hidden_state) = *hs {
+            if !hidden_state.timer_active {
+                hidden_state.timer_active = true;
+                timer!(
+                    seconds * 1000,
+                    (state: S) {
+                        // Save state
+                        if let Ok(s_bytes) = rmp_serde::to_vec(state) {
+                            let _ = set_state(&s_bytes);
+                        }
+                        
+                        // Set up next timer only if still in EveryNSeconds mode
+                        HIDDEN_STATE.with(|cell| {
+                            let mut hs = cell.borrow_mut();
+                            if let Some(ref mut hidden_state) = *hs {
+                                if let SaveOptions::EveryNSeconds(secs) = hidden_state.save_config {
+                                    hidden_state.timer_active = false;
+                                    // I am not sure what the
+                                    kiprintln!("Setting up next timer for {} seconds", secs);
+                                    setup_periodic_save_timer::<S>(secs);
+                                }
+                            }
+                        });
+                    }
+                );
+            }
+        }
+    });
+}
+
+fn maybe_save_state<S>(state: &S) 
+where
+    S: serde::Serialize,
+{
+    HIDDEN_STATE.with(|cell| {
+        let mut hs = cell.borrow_mut();
+        if let Some(ref mut hidden_state) = *hs {
+            if hidden_state.should_save_state() {
+                if let Ok(s_bytes) = rmp_serde::to_vec(state) {
+                    kiprintln!("State persisted");
+                    let _ = set_state(&s_bytes);
+                }
+            }
+        }
+    });
 }
