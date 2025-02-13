@@ -1866,6 +1866,7 @@ name = "kinode_app_common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "kinode_process_lib",
  "once_cell",
  "paste",

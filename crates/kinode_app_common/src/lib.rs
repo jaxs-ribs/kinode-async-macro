@@ -1,5 +1,6 @@
 use kinode_process_lib::get_state;
 use kinode_process_lib::http::server::send_response;
+use kinode_process_lib::http::server::HttpServerRequest;
 use kinode_process_lib::http::server::WsMessageType;
 use kinode_process_lib::http::StatusCode;
 use kinode_process_lib::logging::info;
@@ -7,9 +8,17 @@ use kinode_process_lib::logging::init_logging;
 use kinode_process_lib::logging::warn;
 use kinode_process_lib::logging::Level;
 use std::any::Any;
-use std::collections::HashMap;
 use std::cell::RefCell;
-use kinode_process_lib::http::server::HttpServerRequest;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use serde_json::Value;
+use kinode_process_lib::Request;
+use kinode_process_lib::Address;
+use std::task::{Context, Poll};
+
+use futures_util::task::noop_waker_ref;
+use uuid::Uuid;
 
 use kinode_process_lib::{
     await_message, homepage, http, kiprintln, set_state, LazyLoadBlob, Message, SendError,
@@ -23,6 +32,101 @@ pub mod prelude {
 thread_local! {
     pub static HIDDEN_STATE: RefCell<Option<HiddenState>> = RefCell::new(None);
 }
+
+thread_local! {
+    static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new());
+}
+
+thread_local! {
+    pub static RESPONSE_REGISTRY: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
+}
+
+struct Executor {
+    tasks: Vec<Pin<Box<dyn Future<Output = ()>>>>,
+}
+
+impl Executor {
+    fn new() -> Self {
+        Self { tasks: Vec::new() }
+    }
+
+    fn spawn(&mut self, fut: impl Future<Output = ()> + 'static) {
+        self.tasks.push(Box::pin(fut));
+    }
+
+    fn poll_all_tasks(&mut self) {
+        let mut ctx = Context::from_waker(noop_waker_ref());
+        let mut completed = Vec::new();
+
+        for i in 0..self.tasks.len() {
+            if let Poll::Ready(()) = self.tasks[i].as_mut().poll(&mut ctx) {
+                completed.push(i);
+            }
+        }
+
+        for idx in completed.into_iter().rev() {
+            let _ = self.tasks.remove(idx);
+        }
+    }
+}
+struct ResponseFuture {
+    correlation_id: String,
+}
+
+impl ResponseFuture {
+    fn new(correlation_id: String) -> Self {
+        Self { correlation_id }
+    }
+}
+
+impl Future for ResponseFuture {
+    type Output = Vec<u8>;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let correlation_id = &self.correlation_id;
+
+        let maybe_bytes = RESPONSE_REGISTRY.with(|registry| {
+            let mut map = registry.borrow_mut();
+            map.remove(correlation_id)
+        });
+
+        if let Some(bytes) = maybe_bytes {
+            Poll::Ready(bytes)
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+async fn send_request_and_log(message: Value, target: Address, prefix: &str) {
+    let correlation_id = Uuid::new_v4().to_string();
+    let body = serde_json::to_vec(&message).expect("Failed to serialize JSON");
+    Request::to(target)
+        .body(body)
+        .context(correlation_id.as_bytes().to_vec())
+        .expects_response(30)
+        .send()
+        .expect("Failed to send request");
+
+    let response_bytes = ResponseFuture::new(correlation_id).await;
+
+    match serde_json::from_slice::<Value>(&response_bytes) {
+        Ok(json) => kiprintln!("({prefix}) Got response: {json:?}"),
+        Err(e) => kiprintln!("({prefix}) Failed to parse response: {e}"),
+    }
+}
+
+#[macro_export]
+macro_rules! spawn {
+    ($($code:tt)*) => {
+        $crate::EXECUTOR.with(|ex| {
+            ex.borrow_mut().spawn(async move {
+                $($code)*
+            })
+        })
+    };
+}
+
 // Enum defining the state persistance behaviour
 #[derive(Clone)]
 pub enum SaveOptions {
@@ -249,54 +353,35 @@ fn handle_message<S, T1, T2, T3>(
     T2: serde::Serialize + serde::de::DeserializeOwned,
     T3: serde::Serialize + serde::de::DeserializeOwned,
 {
-    // Get the correlation id
-    let correlation_id = message
-        .context()
-        .map(|c| String::from_utf8_lossy(c).to_string());
+    match message {
+        Message::Response {
+            body,
+            context,
+            ..
+        } => {
+            let correlation_id = context
+                .as_deref()
+                .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+                .unwrap_or_else(|| "no context".to_string());
 
-    if let Some(cid) = correlation_id {
-        // --------------------------------------------------------------------------------------------
-        // Regular callback case
-        // --------------------------------------------------------------------------------------------
-        let pending = HIDDEN_STATE.with(|cell| {
-            let mut hs = cell.borrow_mut();
-            hs.as_mut()
-                .and_then(|state| state.pending_callbacks.remove(&cid))
-        });
-        if let Some(pending) = pending {
-            // EXECUTE the callback
-            if let Err(e) = (pending.on_success)(message.body(), user_state) {
-                kiprintln!("Error in callback: {e}");
+            RESPONSE_REGISTRY.with(|registry| {
+                registry.borrow_mut().insert(correlation_id, body);
+            });
+        }
+        Message::Request { .. } => {
+            if message.is_local() {
+                if message.source().process == "http-server:distro:sys" {
+                    http_request(&message, user_state, server, handle_api_call, handle_ws);
+                } else {
+                    local_request(&message, user_state, server, handle_local_request);
+                }
+            } else {
+                remote_request(&message, user_state, server, handle_remote_request);
             }
-            return;
-        }
-
-        // --------------------------------------------------------------------------------------------
-        // Fan out case
-        // --------------------------------------------------------------------------------------------
-        if let Some((agg_id, idx)) = parse_aggregator_cid(&cid) {
-            let result = match serde_json::from_slice::<serde_json::Value>(message.body()) {
-                Ok(val) => Ok(val),
-                Err(e) => Err(anyhow::anyhow!(e)),
-            };
-
-            aggregator_mark_result(&agg_id, idx, result, user_state);
-            return;
+            // Try to save state based on configuration
+            maybe_save_state(user_state);
         }
     }
-
-    if message.is_local() {
-        if message.source().process == "http-server:distro:sys" {
-            http_request(&message, user_state, server, handle_api_call, handle_ws);
-        } else {
-            local_request(&message, user_state, server, handle_local_request);
-        }
-    } else {
-        remote_request(&message, user_state, server, handle_remote_request);
-    }
-
-    // Try to save state based on configuration
-    maybe_save_state(user_state);
 }
 
 pub fn app<S, T1, T2, T3>(
@@ -347,8 +432,10 @@ where
         }
 
         loop {
+            EXECUTOR.with(|ex| ex.borrow_mut().poll_all_tasks());
             match await_message() {
                 Err(send_error) => {
+                    // TODO: We should either remove this or extend the async stuff here
                     handle_send_error::<S>(&send_error, &mut user_state);
                 }
                 Ok(message) => {
@@ -381,7 +468,6 @@ fn http_request<S, T1>(
 
     match http_request {
         HttpServerRequest::Http(http_request) => {
-
             let Ok(path) = http_request.path() else {
                 warn!("Failed to get path for Http, exiting, this should never happen");
                 send_response(StatusCode::BAD_REQUEST, None, vec![]);
@@ -938,7 +1024,7 @@ pub enum Binding {
         config: kinode_process_lib::http::server::WsBindingConfig,
     },
 }
-fn setup_periodic_save_timer<S>(seconds: u64) 
+fn setup_periodic_save_timer<S>(seconds: u64)
 where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
 {
@@ -954,7 +1040,7 @@ where
                         if let Ok(s_bytes) = rmp_serde::to_vec(state) {
                             let _ = set_state(&s_bytes);
                         }
-                        
+
                         // Set up next timer only if still in EveryNSeconds mode
                         HIDDEN_STATE.with(|cell| {
                             let mut hs = cell.borrow_mut();
@@ -974,7 +1060,7 @@ where
     });
 }
 
-fn maybe_save_state<S>(state: &S) 
+fn maybe_save_state<S>(state: &S)
 where
     S: serde::Serialize,
 {
