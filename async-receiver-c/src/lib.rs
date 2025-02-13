@@ -4,12 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use kinode_app_common::{erect, Binding, State, SaveOptions};
 use kinode_process_lib::http::server::HttpBindingConfig;
-use kinode_process_lib::Response;
 mod kino_local_handlers;
 mod structs;
 
 use kino_local_handlers::*;
-use shared::*;
 use structs::*;
 
 fn init_fn(_state: &mut AppState) {

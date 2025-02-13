@@ -2,16 +2,31 @@ use kinode_process_lib::http::server::HttpServer;
 use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{erect, Binding, State, SaveOptions};
+use kinode_app_common::{cronch, erect, send_request_and_log, Binding, SaveOptions, State};
 use kinode_process_lib::http::server::HttpBindingConfig;
 use serde_json::Value;
 
 mod helpers;
 mod structs;
 
+use shared::receiver_address_a;
 use structs::*;
 
 fn init_fn(_state: &mut ProcessState) {
+    kiprintln!("Initializing Async Requester");
+    std::thread::sleep(std::time::Duration::from_secs(4));
+
+    cronch!(
+        send_request_and_log(
+            serde_json::json!({
+                "message": "Hello, world!"
+            }),
+            receiver_address_a(),
+            "Async Requester"
+        ).await
+    );
+
+
     // kiprintln!("Initializing Async Requester");
     // repeated_timer(state);
 

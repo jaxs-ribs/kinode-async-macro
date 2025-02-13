@@ -9,7 +9,6 @@ mod kino_local_handlers;
 mod structs;
 
 use kino_local_handlers::*;
-use shared::*;
 use structs::*;
 
 fn init_fn(_state: &mut AppState) {

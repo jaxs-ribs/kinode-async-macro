@@ -7,7 +7,7 @@ pub fn kino_local_handler(
     _message: &Message,
     _state: &mut AppState,
     _server: &mut HttpServer,
-    request: Vec<u8>,
+    _request: Vec<u8>,
 ) {
     // kiprintln!("Receiver: Received request: {:?}", request);
     // kiprintln!("Receiver: Sleeping for 3 seconds...");

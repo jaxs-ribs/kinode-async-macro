@@ -34,27 +34,27 @@ thread_local! {
 }
 
 thread_local! {
-    static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new());
+    pub static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new());
 }
 
 thread_local! {
     pub static RESPONSE_REGISTRY: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
 }
 
-struct Executor {
+pub struct Executor {
     tasks: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
 impl Executor {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { tasks: Vec::new() }
     }
 
-    fn spawn(&mut self, fut: impl Future<Output = ()> + 'static) {
+    pub fn spawn(&mut self, fut: impl Future<Output = ()> + 'static) {
         self.tasks.push(Box::pin(fut));
     }
 
-    fn poll_all_tasks(&mut self) {
+    pub fn poll_all_tasks(&mut self) {
         let mut ctx = Context::from_waker(noop_waker_ref());
         let mut completed = Vec::new();
 
@@ -98,7 +98,7 @@ impl Future for ResponseFuture {
     }
 }
 
-async fn _send_request_and_log(message: Value, target: Address, prefix: &str) {
+pub async fn send_request_and_log(message: Value, target: Address, prefix: &str) {
     let correlation_id = Uuid::new_v4().to_string();
     let body = serde_json::to_vec(&message).expect("Failed to serialize JSON");
     Request::to(target)
@@ -117,7 +117,7 @@ async fn _send_request_and_log(message: Value, target: Address, prefix: &str) {
 }
 
 #[macro_export]
-macro_rules! spawn {
+macro_rules! cronch {
     ($($code:tt)*) => {
         $crate::EXECUTOR.with(|ex| {
             ex.borrow_mut().spawn(async move {
@@ -476,7 +476,7 @@ fn pretty_print_send_error(error: &SendError) {
     );
 }
 
-fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, user_state: &mut S) {
+fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, _user_state: &mut S) {
     // Print the error
     pretty_print_send_error(send_error);
 

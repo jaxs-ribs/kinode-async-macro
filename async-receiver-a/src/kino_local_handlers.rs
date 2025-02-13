@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use crate::*;
 
 /// This will get triggered with a terminal request
@@ -7,8 +9,16 @@ pub fn kino_local_handler(
     _message: &Message,
     _state: &mut AppState,
     _server: &mut HttpServer,
-    request: Vec<u8>,
+    _request: Value,
 ) {
+    kiprintln!("Receiver: Received request: {:?}", _request);
+    let body = serde_json::to_vec(&serde_json::json!({
+        "message": "Hello from A"
+    }))
+    .expect("Failed to serialize JSON");
+
+    let _ = Response::new().body(body).send();
+
     // kiprintln!("Receiver: Received request: {:?}", request);
     // kiprintln!("Receiver: Sleeping for 3 seconds...");
     // std::thread::sleep(std::time::Duration::from_secs(3));
