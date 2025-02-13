@@ -98,7 +98,7 @@ impl Future for ResponseFuture {
     }
 }
 
-async fn send_request_and_log(message: Value, target: Address, prefix: &str) {
+async fn _send_request_and_log(message: Value, target: Address, prefix: &str) {
     let correlation_id = Uuid::new_v4().to_string();
     let body = serde_json::to_vec(&message).expect("Failed to serialize JSON");
     Request::to(target)
@@ -139,83 +139,16 @@ pub enum SaveOptions {
     // Persist State Every N Seconds
     EveryNSeconds(u64),
 }
-/// The application state containing the callback map plus the user state. This is the actual state.
 pub struct HiddenState {
-    pub pending_callbacks: HashMap<String, PendingCallback>,
-    pub accumulators: HashMap<String, Box<dyn Any + Send>>,
     save_config: SaveOptions,
     message_count: u64,
-    timer_active: bool,
-}
-
-pub struct PendingCallback {
-    pub on_success: Box<dyn FnOnce(&[u8], &mut dyn Any) -> anyhow::Result<()> + Send>,
-    pub on_timeout: Option<Box<dyn FnOnce(&mut dyn Any) -> anyhow::Result<()> + Send>>,
-}
-
-pub struct FanOutAggregator<T> {
-    total: usize,
-    results: Vec<Option<Result<T, anyhow::Error>>>,
-    completed: usize,
-
-    /// Called once, when completed == total
-    on_done:
-        Box<dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send>,
-}
-
-impl<T> FanOutAggregator<T> {
-    pub fn new(
-        total: usize,
-        on_done: Box<
-            dyn FnOnce(Vec<Result<T, anyhow::Error>>, &mut dyn Any) -> anyhow::Result<()> + Send,
-        >,
-    ) -> Self {
-        let mut results = Vec::with_capacity(total);
-        for _ in 0..total {
-            results.push(None);
-        }
-
-        Self {
-            total,
-            results,
-            completed: 0,
-            on_done,
-        }
-    }
-
-    pub fn set_result(&mut self, i: usize, result: Result<T, anyhow::Error>) {
-        if i < self.results.len() && self.results[i].is_none() {
-            self.results[i] = Some(result);
-            self.completed += 1;
-        }
-    }
-
-    pub fn is_done(&self) -> bool {
-        self.completed >= self.total
-    }
-
-    /// Finalize => calls on_done(...) with the final vector
-    pub fn finalize(self, user_state: &mut dyn Any) -> anyhow::Result<()> {
-        let FanOutAggregator {
-            results, on_done, ..
-        } = self;
-        let final_vec = results
-            .into_iter()
-            .map(|item| item.unwrap_or_else(|| Err(anyhow::anyhow!("missing subresponse"))))
-            .collect();
-
-        (on_done)(final_vec, user_state)
-    }
 }
 
 impl HiddenState {
     pub fn new(save_config: SaveOptions) -> Self {
         Self {
-            pending_callbacks: HashMap::new(),
-            accumulators: HashMap::new(),
             save_config,
             message_count: 0,
-            timer_active: false,
         }
     }
 
@@ -237,40 +170,7 @@ impl HiddenState {
     }
 }
 
-#[macro_export]
-macro_rules! timer {
-    ($duration:expr, ($st:ident : $user_state_ty:ty) $callback_block:block) => {{
-        use uuid::Uuid;
-
-        let correlation_id = Uuid::new_v4().to_string();
-
-        $crate::HIDDEN_STATE.with(|cell| {
-            let mut hs = cell.borrow_mut();
-            if let Some(ref mut hidden_state) = *hs {
-                hidden_state.pending_callbacks.insert(
-                    correlation_id.clone(),
-                    $crate::PendingCallback {
-                        on_success: Box::new(move |_resp_bytes: &[u8], any_state: &mut dyn std::any::Any| {
-                            let $st = any_state
-                                .downcast_mut::<$user_state_ty>()
-                                .ok_or_else(|| anyhow::anyhow!("Downcast failed!"))?;
-                            $callback_block
-                            Ok(())
-                        }),
-                        on_timeout: None,
-                    },
-                );
-            }
-        });
-
-        let total_timeout_seconds = ($duration / 1000) + 1;
-        let _ = kinode_process_lib::Request::to(("our", "timer", "distro", "sys"))
-            .body(kinode_process_lib::timer::TimerAction::SetTimer($duration))
-            .expects_response(total_timeout_seconds)
-            .context(correlation_id.as_bytes())
-            .send();
-    }};
-}
+// TODO: We need a timer macro again.
 
 /// Trait that must be implemented by application state types
 pub trait State {
@@ -413,8 +313,9 @@ where
     }
 
     // Set up timer if needed
-    if let SaveOptions::EveryNSeconds(seconds) = save_config {
-        setup_periodic_save_timer::<S>(seconds);
+    if let SaveOptions::EveryNSeconds(_seconds) = save_config {
+        // TODO: Needs to be asyncified 
+        // setup_periodic_save_timer::<S>(seconds);
     }
 
     move || {
@@ -424,9 +325,6 @@ where
         let mut server = setup_server(ui_config.as_ref(), &endpoints);
         let mut user_state = initialize_state::<S>();
 
-        // Execute the user specified init function
-        // Note: It should always be called _after_ the hidden state is initialized, so that
-        // users can call macros that depend on having the callback map in the hidden state.
         {
             init_fn(&mut user_state);
         }
@@ -582,46 +480,6 @@ fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, user_sta
     // Print the error
     pretty_print_send_error(send_error);
 
-    // Get the correlation id
-    let Some(correlation_id) = send_error
-        .context
-        .as_ref()
-        .map(|bytes| String::from_utf8_lossy(bytes).to_string())
-    else {
-        return;
-    };
-
-    // --------------------------------------------------------------------------------------------
-    // Handle the single callback case
-    // --------------------------------------------------------------------------------------------
-    let single_callback = HIDDEN_STATE.with(|cell| {
-        let mut hs = cell.borrow_mut();
-        hs.as_mut()
-            .and_then(|st| st.pending_callbacks.remove(&correlation_id))
-    });
-    if let Some(single_callback) = single_callback {
-        if let Some(cb) = single_callback.on_timeout {
-            if let Err(e) = cb(user_state) {
-                kiprintln!("Error in on_timeout callback: {e}");
-            }
-        }
-    }
-
-    // --------------------------------------------------------------------------------------------
-    // Handle the fan out case
-    // --------------------------------------------------------------------------------------------
-    if let Some((agg_id, idx)) = parse_aggregator_cid(&correlation_id) {
-        aggregator_mark_result(&agg_id, idx, Err(anyhow::anyhow!("timeout")), user_state);
-    }
-}
-
-// Parse a correlation id of the form "agg_id:idx"
-fn parse_aggregator_cid(corr: &str) -> Option<(String, usize)> {
-    let mut parts = corr.split(':');
-    let agg_id = parts.next()?.to_owned();
-    let idx_str = parts.next()?;
-    let idx = idx_str.parse::<usize>().ok()?;
-    Some((agg_id, idx))
 }
 
 #[doc(hidden)]
@@ -633,102 +491,7 @@ macro_rules! __check_not_all_empty {
     ($($any:tt)*) => {};
 }
 
-/// # How to Use the `erect!` Macro
-///
-/// The `erect!` macro is a powerful tool for defining and exporting a new component in your Kinode application.
-/// It allows you to bundle together the component's metadata, UI configuration, endpoints, message handlers,
-/// and initialization logic in one concise block. Below is a breakdown of each parameter:
-///
-/// - **name**:  
-///   A string literal that represents the name of the component. This name may be used for display purposes in a UI
-///   or in logging.
-///
-/// - **icon**:  
-///   An optional parameter defining the component's icon. Pass `None` if you do not wish to specify one, or use
-///   `Some(icon_identifier)` where `icon_identifier` describes your icon.
-///
-/// - **widget**:  
-///   An optional widget attachment for your component. This could be a UI fragment or identifier. Use `None` if not needed.
-///
-/// - **ui**:  
-///   An optional configuration of type `HttpBindingConfig`. This is used for setting up the UI binding for your component.
-///   For example, using `Some(HttpBindingConfig::default())` applies the default UI configuration.
-///
-/// - **endpoints**:  
-///   A list (array) of endpoints that your component will expose. Each endpoint is specified as a variant of the
-///   `Binding` enum:
-///     - `Binding::Http { path, config }`: Defines an HTTP API endpoint.  
-///       * `path`: A string representing the URL path.  
-///       * `config`: The associated HTTP binding configuration.
-///     - `Binding::Ws { path, config }`: Defines a WebSocket endpoint.  
-///       * `path`: A string representing the URL path.  
-///       * `config`: The WebSocket-specific binding configuration.
-///
-/// - **save_config**:  
-///   The save configuration for the component. This determines how often the state should be saved.
-///   Available options are:
-///   - `SaveOptions::Never`: State is never automatically saved
-///   - `SaveOptions::EveryNSeconds(n)`: State is saved every n seconds
-///   - `SaveOptions::OnChange`: State is saved after every modification
-///
-/// - **handlers**:  
-///   A block for providing callbacks to handle incoming messages. These handlers correspond to various kinds
-///   of requests:
-///     - **api**: The handler for HTTP API calls. If your component does not require an API handler, you can
-///       simply pass `_`.
-///     - **local**: The handler function for processing local (internal) requests. This must be provided if your
-///       component deals with internal messages (e.g., `kino_local_handler`).
-///     - **remote**: The handler for remote requests. If not applicable, specify `_`.
-///     - **ws**: The WebSocket message handler. Use `_` if no WebSocket handling is needed.
-///
-/// - **init**:  
-///   The initialization function that sets up the component's state when the component starts. This function should
-///   match the expected signature (taking a mutable reference to your state) and perform any necessary setup tasks.
-///
-/// - **wit_world**:  
-///   The name of the WIT world file to generate. This should match the name of the WIT file in the `target/wit` directory.
-///
-/// - **additional_derives**:  
-///   Additional derives to add to the generated code. Mostly not needed.
-///
-/// **Example Usage:**
-///
-/// The following example creates a component named **"Async Requester"** with one HTTP endpoint and one WebSocket endpoint:
-///
-/// ```rust:crates/kinode_app_common/src/lib.rs
-/// erect!(
-///     name: "Async Requester",
-///     icon: None,
-///     widget: None,
-///     ui: Some(HttpBindingConfig::default()),
-///     endpoints: [
-///         Binding::Http {
-///             path: "/api",
-///             config: HttpBindingConfig::default(),
-///         },
-///         Binding::Ws {
-///             path: "/updates",
-///             config: WsBindingConfig::default(),
-///         },
-///     ],
-///     save_config: SaveOptions::EveryNSeconds(10),
-///     handlers: {
-///         http: _, // The handler for HTTP API calls
-///         local: kino_local_handler, // The handler for local kinode messages
-///         remote: _, // The handler for remote kinode messages
-///         ws: _, // The websocket handler
-///     },
-///     init: init_fn, // The init function that will get run first
-///     wit_world: "async-app-template-dot-os-v0", // Your wit file name
-///     additional_derives: [Debug, Clone] // Mostly not needed
-/// );
-/// ```
-///
-/// **Important:**  
-/// - Make sure that the signatures of your handler functions (e.g., `kino_local_handler`) and the initialization
-///   function (`init_fn`) match the expected types in the Kinode application framework.  
-/// - Specifying `_` for any handler indicates that the corresponding functionality is not implemented or needed
-///   for this component.
+// TODO: Rewrite the erect macro to use the new app function.
 #[macro_export]
 macro_rules! erect {
     (
@@ -798,170 +561,8 @@ macro_rules! erect {
     };
 }
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __declare_types_internal {
-    (
-        $(
-            $outer:ident {
-                $(
-                    $variant:ident $req_ty:ty => $res_ty:ty
-                )*
-            }
-        ),*
-        $(,)?
-    ) => {
-        $crate::paste::paste! {
-            #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
-            pub enum Req {
-                $(
-                    $outer([<$outer Request>]),
-                )*
-            }
-
-            $(
-                #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
-                pub enum [<$outer Request>] {
-                    $(
-                        $variant($req_ty),
-                    )*
-                }
-
-                #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
-                pub enum [<$outer Response>] {
-                    $(
-                        $variant($res_ty),
-                    )*
-                }
-            )*
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! declare_types {
-    ($($tt:tt)*) => {
-        $crate::__declare_types_internal! { $($tt)* }
-    };
-}
-
 // Re-export paste for use in our macros
 pub use paste;
-
-pub fn aggregator_mark_result(
-    aggregator_id: &str,
-    i: usize,
-    result: anyhow::Result<serde_json::Value>,
-    user_state_any: &mut dyn Any,
-) {
-    // Indentationmaxxing
-    HIDDEN_STATE.with(|cell| {
-        if let Some(ref mut hidden) = *cell.borrow_mut() {
-            if let Some(acc_any) = hidden.accumulators.get_mut(aggregator_id) {
-                if let Some(agg) = acc_any.downcast_mut::<FanOutAggregator<serde_json::Value>>() {
-                    agg.set_result(i, result);
-                    if agg.is_done() {
-                        let aggregator_box = hidden.accumulators.remove(aggregator_id).unwrap();
-                        if let Ok(agg2) =
-                            aggregator_box.downcast::<FanOutAggregator<serde_json::Value>>()
-                        {
-                            let aggregator = *agg2;
-                            if let Err(e) = aggregator.finalize(user_state_any) {
-                                kiprintln!("Error finalizing aggregator: {e}");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
-#[macro_export]
-macro_rules! fan_out {
-    (
-        $addresses:expr,
-        $requests:expr,
-        ($all_results:ident, $st:ident : $st_ty:ty) $done_block:block,
-        $timeout:expr
-    ) => {{
-        use ::anyhow::{anyhow, Result as AnyResult};
-        use ::uuid::Uuid;
-        use ::serde_json;
-
-        // A unique aggregator ID for this fan-out sequence
-        let aggregator_id = Uuid::new_v4().to_string();
-        let total = $addresses.len();
-
-        // Build the aggregator that will hold partial results and run your final callback
-        let aggregator = $crate::FanOutAggregator::new(
-            total,
-            Box::new(move |results: Vec<AnyResult<serde_json::Value>>, user_state: &mut dyn std::any::Any| -> AnyResult<()> {
-                let $st = user_state
-                    .downcast_mut::<$st_ty>()
-                    .ok_or_else(|| anyhow!("Downcast failed!"))?;
-
-                let $all_results = results;
-                $done_block
-                Ok(())
-            }),
-        );
-
-        // Insert this aggregator into HIDDEN_STATE's accumulators
-        $crate::HIDDEN_STATE.with(|cell| {
-            if let Some(ref mut hidden_state) = *cell.borrow_mut() {
-                hidden_state
-                    .accumulators
-                    .insert(aggregator_id.clone(), Box::new(aggregator));
-            }
-        });
-
-        // For each address+request, serialize/send, and if there's an immediate error, mark aggregator
-        for (i, address) in $addresses.iter().enumerate() {
-            let correlation_id = format!("{}:{}", aggregator_id, i);
-
-            // Serialize request
-            let body = match serde_json::to_vec(&$requests[i]) {
-                Ok(b) => b,
-                Err(e) => {
-                    // Mark aggregator's i'th result as an error
-                    $crate::HIDDEN_STATE.with(|cell| {
-                        if let Some(ref mut hidden_st) = *cell.borrow_mut() {
-                            $crate::aggregator_mark_result(
-                                &aggregator_id,
-                                i,
-                                Err(anyhow!("Error serializing request: {}", e)),
-                                hidden_st as &mut dyn std::any::Any,
-                            );
-                        }
-                    });
-                    continue;
-                }
-            };
-
-            // Send the request - using fully qualified path
-            let send_result = kinode_process_lib::Request::to(address)
-                .body(body)
-                .expects_response($timeout)
-                .context(correlation_id.as_bytes())
-                .send();
-
-            // If the immediate send fails, also mark aggregator
-            if let Err(e) = send_result {
-                $crate::HIDDEN_STATE.with(|cell| {
-                    if let Some(ref mut hidden_st) = *cell.borrow_mut() {
-                        $crate::aggregator_mark_result(
-                            &aggregator_id,
-                            i,
-                            Err(anyhow!("Send error: {:?}", e)),
-                            hidden_st as &mut dyn std::any::Any,
-                        );
-                    }
-                });
-            }
-        }
-    }};
-}
 
 #[macro_export]
 macro_rules! __maybe {
@@ -1023,41 +624,6 @@ pub enum Binding {
         path: &'static str,
         config: kinode_process_lib::http::server::WsBindingConfig,
     },
-}
-fn setup_periodic_save_timer<S>(seconds: u64)
-where
-    S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
-{
-    HIDDEN_STATE.with(|cell| {
-        let mut hs = cell.borrow_mut();
-        if let Some(ref mut hidden_state) = *hs {
-            if !hidden_state.timer_active {
-                hidden_state.timer_active = true;
-                timer!(
-                    seconds * 1000,
-                    (state: S) {
-                        // Save state
-                        if let Ok(s_bytes) = rmp_serde::to_vec(state) {
-                            let _ = set_state(&s_bytes);
-                        }
-
-                        // Set up next timer only if still in EveryNSeconds mode
-                        HIDDEN_STATE.with(|cell| {
-                            let mut hs = cell.borrow_mut();
-                            if let Some(ref mut hidden_state) = *hs {
-                                if let SaveOptions::EveryNSeconds(secs) = hidden_state.save_config {
-                                    hidden_state.timer_active = false;
-                                    // I am not sure what the
-                                    kiprintln!("Setting up next timer for {} seconds", secs);
-                                    setup_periodic_save_timer::<S>(secs);
-                                }
-                            }
-                        });
-                    }
-                );
-            }
-        }
-    });
 }
 
 fn maybe_save_state<S>(state: &S)

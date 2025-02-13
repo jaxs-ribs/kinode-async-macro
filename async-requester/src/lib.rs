@@ -2,26 +2,21 @@ use kinode_process_lib::http::server::HttpServer;
 use kinode_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{erect, fan_out, timer, Binding, State, SaveOptions};
+use kinode_app_common::{erect, Binding, State, SaveOptions};
 use kinode_process_lib::http::server::HttpBindingConfig;
-use kinode_process_lib::Address;
-use proc_macro_send::send_async;
 use serde_json::Value;
-use shared::receiver_address_a;
 
 mod helpers;
 mod structs;
 
-use helpers::*;
-use shared::*;
 use structs::*;
 
-fn init_fn(state: &mut ProcessState) {
-    kiprintln!("Initializing Async Requester");
-    repeated_timer(state);
+fn init_fn(_state: &mut ProcessState) {
+    // kiprintln!("Initializing Async Requester");
+    // repeated_timer(state);
 
-    std::thread::sleep(std::time::Duration::from_secs(4));
-    fanout_message();
+    // std::thread::sleep(std::time::Duration::from_secs(4));
+    // fanout_message();
 }
 
 /// This will get triggered with a terminal request
@@ -33,7 +28,7 @@ pub fn kino_local_handler(
     _server: &mut HttpServer,
     _request: String,
 ) {
-    message_a();
+    // message_a();
 }
 
 fn http_handler(

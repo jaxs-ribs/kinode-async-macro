@@ -697,7 +697,6 @@ dependencies = [
  "kinode_app_common",
  "kinode_process_lib",
  "once_cell",
- "proc_macro_send",
  "process_macros",
  "serde",
  "serde_json",
@@ -714,7 +713,6 @@ dependencies = [
  "kinode_app_common",
  "kinode_process_lib",
  "once_cell",
- "proc_macro_send",
  "process_macros",
  "serde",
  "serde_json",
@@ -731,7 +729,6 @@ dependencies = [
  "kinode_app_common",
  "kinode_process_lib",
  "once_cell",
- "proc_macro_send",
  "process_macros",
  "serde",
  "serde_json",
@@ -748,7 +745,6 @@ dependencies = [
  "kinode_app_common",
  "kinode_process_lib",
  "once_cell",
- "proc_macro_send",
  "process_macros",
  "serde",
  "serde_json",
@@ -2377,20 +2373,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60946a68e5f9d28b0dc1c21bb8a97ee7d018a8b322fa57838ba31cc878e22d99"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "proc_macro_send"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "kinode_app_common",
- "kinode_process_lib",
- "proc-macro2",
- "quote",
- "serde",
- "syn 2.0.96",
- "uuid",
 ]
 
 [[package]]

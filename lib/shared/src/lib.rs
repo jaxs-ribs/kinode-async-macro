@@ -1,4 +1,3 @@
-use kinode_app_common::*;
 use kinode_process_lib::Address;
 use process_macros::SerdeJsonInto;
 use serde::{Deserialize, Serialize};
@@ -19,18 +18,6 @@ pub fn requester_address() -> Address {
     ("our", "async-requester", "async-app", "uncentered.os").into()
 }
 
-declare_types! {
-    // We're redundant here just so we can demo and modify if we want
-    Async {
-        StepA String => i32
-        StepB i32 => u64
-        StepC u64 => String
-        Gather () => Result<String, String>
-    },
-    AsyncNoExist {
-        Gather () => Result<String, String>
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
 pub struct SomeStruct {
