@@ -14,7 +14,6 @@ use kino_local_handlers::*;
 use structs::*;
 
 fn init_fn(_state: &mut AppState) {
-    kiprintln!("Initializing Async Receiver C");
 }
 
 erect!(
@@ -28,7 +27,7 @@ erect!(
             config: HttpBindingConfig::default(),
         },
     ],
-    save_config: SaveOptions::Never,
+    save_config: SaveOptions::EveryMessage,
     handlers: {
         http: _,
         local: kino_local_handler,

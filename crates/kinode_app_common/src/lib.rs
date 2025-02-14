@@ -7,14 +7,17 @@ use kinode_process_lib::logging::info;
 use kinode_process_lib::logging::init_logging;
 use kinode_process_lib::logging::warn;
 use kinode_process_lib::logging::Level;
+use kinode_process_lib::Address;
+use kinode_process_lib::Request;
+use kinode_process_lib::SendErrorKind;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use serde_json::Value;
-use kinode_process_lib::Request;
-use kinode_process_lib::Address;
 use std::task::{Context, Poll};
 
 use futures_util::task::noop_waker_ref;
@@ -98,22 +101,72 @@ impl Future for ResponseFuture {
     }
 }
 
-pub async fn send_request_and_log(message: Value, target: Address, prefix: &str) {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SendResult<R> {
+    Success(R),
+    Timeout,
+    Offline,
+    DeserializationError(String),
+}
+
+pub async fn send<R>(
+    message: impl serde::Serialize,
+    target: Address,
+    timeout_secs: u64,
+) -> SendResult<R>
+where
+    R: serde::de::DeserializeOwned,
+{
     let correlation_id = Uuid::new_v4().to_string();
-    let body = serde_json::to_vec(&message).expect("Failed to serialize JSON");
-    Request::to(target)
+    let body = serde_json::to_vec(&message).expect("Failed to serialize message");
+
+    let _ = Request::to(target)
         .body(body)
         .context(correlation_id.as_bytes().to_vec())
-        .expects_response(30)
-        .send()
-        .expect("Failed to send request");
+        .expects_response(timeout_secs)
+        .send();
 
     let response_bytes = ResponseFuture::new(correlation_id).await;
+    match serde_json::from_slice(&response_bytes) {
+        Ok(result) => return SendResult::Success(result),
+        Err(e) => match serde_json::from_slice::<SendErrorKind>(&response_bytes) {
+            Ok(kind) => match kind {
+                SendErrorKind::Offline => {
+                    return SendResult::Offline;
+                }
+                SendErrorKind::Timeout => {
+                    return SendResult::Timeout;
+                }
+            },
+            _ => {}
+        },
+    };
+    let error_msg = String::from_utf8_lossy(&response_bytes).into_owned();
+    return SendResult::DeserializationError(error_msg);
+}
 
-    match serde_json::from_slice::<Value>(&response_bytes) {
-        Ok(json) => kiprintln!("({prefix}) Got response: {json:?}"),
-        Err(e) => kiprintln!("({prefix}) Failed to parse response: {e}"),
+pub async fn send_parallel_requests<R>(
+    targets: Vec<Address>,
+    messages: Vec<impl serde::Serialize>,
+    timeout_secs: u64,
+) -> Vec<SendResult<R>>
+where
+    R: serde::de::DeserializeOwned,
+{
+    let mut futures = Vec::new();
+
+    for (target, message) in targets.into_iter().zip(messages) {
+        futures.push(send::<R>(message, target, timeout_secs));
     }
+
+    let mut results = Vec::new();
+
+    for future in futures {
+        let result = future.await;
+        results.push(result);
+    }
+
+    results
 }
 
 #[macro_export]
@@ -254,11 +307,7 @@ fn handle_message<S, T1, T2, T3>(
     T3: serde::Serialize + serde::de::DeserializeOwned,
 {
     match message {
-        Message::Response {
-            body,
-            context,
-            ..
-        } => {
+        Message::Response { body, context, .. } => {
             let correlation_id = context
                 .as_deref()
                 .map(|bytes| String::from_utf8_lossy(bytes).to_string())
@@ -314,7 +363,7 @@ where
 
     // Set up timer if needed
     if let SaveOptions::EveryNSeconds(_seconds) = save_config {
-        // TODO: Needs to be asyncified 
+        // TODO: Needs to be asyncified
         // setup_periodic_save_timer::<S>(seconds);
     }
 
@@ -480,6 +529,23 @@ fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, _user_st
     // Print the error
     pretty_print_send_error(send_error);
 
+    // If this is a timeout and we have a context (correlation_id), resolve the future with None
+    if let SendError {
+        kind,
+        context: Some(context),
+        ..
+    } = send_error
+    {
+        // Convert context bytes to correlation_id string
+        if let Ok(correlation_id) = String::from_utf8(context.to_vec()) {
+            // Serialize None as the response
+            let none_response = serde_json::to_vec(kind).unwrap();
+
+            RESPONSE_REGISTRY.with(|registry| {
+                registry.borrow_mut().insert(correlation_id, none_response);
+            });
+        }
+    }
 }
 
 #[doc(hidden)]

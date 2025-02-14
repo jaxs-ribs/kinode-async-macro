@@ -742,6 +742,7 @@ name = "async-requester"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "kinode_app_common",
  "kinode_process_lib",
  "once_cell",

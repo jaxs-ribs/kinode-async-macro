@@ -13,7 +13,6 @@ use kino_local_handlers::*;
 use structs::*;
 
 fn init_fn(_state: &mut AppState) {
-    kiprintln!("Initializing Async Receiver A");
 }
 
 erect!(

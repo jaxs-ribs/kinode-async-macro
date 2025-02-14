@@ -9,6 +9,9 @@ pub fn kino_local_handler(
     _server: &mut HttpServer,
     request: AsyncRequest,
 ) {
+    kiprintln!("Receiver A Sleeping for 3 seconds");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    
     let response = match request {
         AsyncRequest::StepA(s) => AsyncResponse::StepA(s.len() as i32),
         AsyncRequest::StepB(n) => AsyncResponse::StepB(n * 2),
