@@ -23,8 +23,14 @@ fn init_fn(_state: &mut ProcessState) {
             }),
             receiver_address_a(),
             "Async Requester"
-        ).await
+        ).await;
+        kiprintln!("Your fat momma is a hoe.");
     );
+
+    /*
+    
+    
+     */
 
 
     // kiprintln!("Initializing Async Requester");

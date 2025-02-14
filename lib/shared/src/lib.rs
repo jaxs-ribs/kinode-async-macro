@@ -18,6 +18,21 @@ pub fn requester_address() -> Address {
     ("our", "async-requester", "async-app", "uncentered.os").into()
 }
 
+#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+pub enum AsyncRequest {
+    StepA(String),
+    StepB(u64),
+    StepC(u64),
+    Gather(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
+pub enum AsyncResponse {
+    StepA(i32),
+    StepB(u64),
+    StepC(String),
+    Gather(String),
+}
 
 #[derive(Debug, Serialize, Deserialize, SerdeJsonInto, Clone)]
 pub struct SomeStruct {
