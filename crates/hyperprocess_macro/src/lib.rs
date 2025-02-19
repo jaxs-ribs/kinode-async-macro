@@ -160,9 +160,100 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
     })
 }
 
-fn analyze_methods(
-    impl_block: &ItemImpl,
-) -> syn::Result<(
+struct MethodSignatureSpec {
+    param_count: usize,
+    param_types: Vec<(&'static str, &'static str)>, // (expected_type, error_message)
+    handler_name: &'static str,
+}
+
+fn validate_method_signature(method: &syn::ImplItemFn, spec: MethodSignatureSpec) -> syn::Result<()> {
+    // Validate parameter count
+    if method.sig.inputs.len() != spec.param_count {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            format!("{} handler must take {} parameters", spec.handler_name, spec.param_count)
+        ));
+    }
+
+    // Skip first parameter (assumed to be &mut self)
+    for (idx, (expected_type, error_msg)) in spec.param_types.iter().enumerate() {
+        match &method.sig.inputs[idx + 1] {
+            syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == *expected_type => {}
+            _ => return Err(syn::Error::new_spanned(&method.sig.inputs[idx + 1], error_msg))
+        }
+    }
+
+    // Validate return type
+    if !matches!(method.sig.output, syn::ReturnType::Default) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            format!("{} handler must not return a value", spec.handler_name),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
+    let spec = MethodSignatureSpec {
+        param_count: 1,
+        param_types: vec![],
+        handler_name: "Init",
+    };
+
+    // Special case for init method since it only needs &mut self
+    if !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "Init method must take only &mut self",
+        ));
+    }
+
+    validate_method_signature(method, spec)
+}
+
+fn validate_http_method(method: &syn::ImplItemFn) -> syn::Result<()> {
+    let spec = MethodSignatureSpec {
+        param_count: 3,
+        param_types: vec![
+            ("& str", "Second parameter must be &str"),
+        ],
+        handler_name: "HTTP",
+    };
+    validate_method_signature(method, spec)
+}
+
+fn validate_message_handler(method: &syn::ImplItemFn, handler_name: &str) -> syn::Result<()> {
+    let spec = MethodSignatureSpec {
+        param_count: 4,
+        param_types: vec![
+            ("& Message", "Second parameter must be &Message"),
+            ("& mut HttpServer", "Third parameter must be &mut HttpServer"),
+        ],
+        handler_name: match handler_name {
+            "Local" => "Local",
+            "Remote" => "Remote",
+            _ => "Message", // fallback, though this shouldn't happen
+        },
+    };
+    validate_method_signature(method, spec)
+}
+
+fn validate_ws_method(method: &syn::ImplItemFn) -> syn::Result<()> {
+    let spec = MethodSignatureSpec {
+        param_count: 5,
+        param_types: vec![
+            ("& mut HttpServer", "Second parameter must be &mut HttpServer"),
+            ("u32", "Third parameter must be u32"),
+            ("WsMessageType", "Fourth parameter must be WsMessageType"),
+            ("LazyLoadBlob", "Fifth parameter must be LazyLoadBlob"),
+        ],
+        handler_name: "WS",
+    };
+    validate_method_signature(method, spec)
+}
+
+fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(
     Option<syn::Ident>,
     Option<syn::Ident>,
     Option<syn::Ident>,
@@ -179,205 +270,43 @@ fn analyze_methods(
         if let syn::ImplItem::Fn(method) = item {
             for attr in &method.attrs {
                 let ident = method.sig.ident.clone();
+                
                 if attr.path().is_ident("init") {
                     if init_method.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            attr,
-                            "Multiple #[init] methods defined",
-                        ));
+                        return Err(syn::Error::new_spanned(attr, "Multiple #[init] methods defined"));
                     }
-                    if method.sig.inputs.len() != 1
-                        || !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_)))
-                    {
-                        return Err(syn::Error::new_spanned(
-                            &method.sig,
-                            "Init method must take only &mut self",
-                        ));
-                    }
-                    if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(
-                            &method.sig,
-                            "Init method must not return a value",
-                        ));
-                    }
-                    init_method = Some(ident.clone());
+                    validate_init_method(method)?;
+                    init_method = Some(ident);
                 } else if attr.path().is_ident("http") {
                     if http_method.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            attr,
-                            "Multiple #[http] methods defined",
-                        ));
+                        return Err(syn::Error::new_spanned(attr, "Multiple #[http] methods defined"));
                     }
-                    if method.sig.inputs.len() != 3 {
-                        return Err(syn::Error::new_spanned(
-                            &method.sig,
-                            "HTTP handler must take &mut self, &str, and a request type",
-                        ));
-                    }
-                    match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string() == "& str" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[1],
-                                "Second parameter must be &str",
-                            ))
-                        }
-                    }
-                    if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(
-                            &method.sig,
-                            "HTTP handler must not return a value",
-                        ));
-                    }
-                    http_method = Some(ident.clone());
+                    validate_http_method(method)?;
+                    http_method = Some(ident);
                 } else if attr.path().is_ident("local") {
                     if local_method.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            attr,
-                            "Multiple #[local] methods defined",
-                        ));
+                        return Err(syn::Error::new_spanned(attr, "Multiple #[local] methods defined"));
                     }
-                    if method.sig.inputs.len() != 4 {
-                        return Err(syn::Error::new_spanned(&method.sig, "Local handler must take &mut self, &Message, &mut HttpServer, and a request type"));
-                    }
-                    match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string() == "& Message" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[1],
-                                "Second parameter must be &Message",
-                            ))
-                        }
-                    }
-                    match &method.sig.inputs[2] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string()
-                                == "& mut HttpServer" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[2],
-                                "Third parameter must be &mut HttpServer",
-                            ))
-                        }
-                    }
-                    if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(
-                            &method.sig,
-                            "Local handler must not return a value",
-                        ));
-                    }
-                    local_method = Some(ident.clone());
+                    validate_message_handler(method, "Local")?;
+                    local_method = Some(ident);
                 } else if attr.path().is_ident("remote") {
                     if remote_method.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            attr,
-                            "Multiple #[remote] methods defined",
-                        ));
+                        return Err(syn::Error::new_spanned(attr, "Multiple #[remote] methods defined"));
                     }
-                    if method.sig.inputs.len() != 4 {
-                        return Err(syn::Error::new_spanned(&method.sig, "Remote handler must take &mut self, &Message, &mut HttpServer, and a request type"));
-                    }
-                    match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string() == "& Message" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[1],
-                                "Second parameter must be &Message",
-                            ))
-                        }
-                    }
-                    match &method.sig.inputs[2] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string()
-                                == "& mut HttpServer" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[2],
-                                "Third parameter must be &mut HttpServer",
-                            ))
-                        }
-                    }
-                    if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(
-                            &method.sig,
-                            "Remote handler must not return a value",
-                        ));
-                    }
-                    remote_method = Some(ident.clone());
+                    validate_message_handler(method, "Remote")?;
+                    remote_method = Some(ident);
                 } else if attr.path().is_ident("ws") {
                     if ws_method.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            attr,
-                            "Multiple #[ws] methods defined",
-                        ));
+                        return Err(syn::Error::new_spanned(attr, "Multiple #[ws] methods defined"));
                     }
-                    if method.sig.inputs.len() != 5 {
-                        return Err(syn::Error::new_spanned(&method.sig, "WS handler must take &mut self, &mut HttpServer, u32, WsMessageType, and LazyLoadBlob"));
-                    }
-                    match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string()
-                                == "& mut HttpServer" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[1],
-                                "Second parameter must be &mut HttpServer",
-                            ))
-                        }
-                    }
-                    match &method.sig.inputs[2] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string() == "u32" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[2],
-                                "Third parameter must be u32",
-                            ))
-                        }
-                    }
-                    match &method.sig.inputs[3] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string() == "WsMessageType" => {
-                        }
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[3],
-                                "Fourth parameter must be WsMessageType",
-                            ))
-                        }
-                    }
-                    match &method.sig.inputs[4] {
-                        syn::FnArg::Typed(pat)
-                            if pat.ty.as_ref().to_token_stream().to_string() == "LazyLoadBlob" => {}
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &method.sig.inputs[4],
-                                "Fifth parameter must be LazyLoadBlob",
-                            ))
-                        }
-                    }
-                    if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(
-                            &method.sig,
-                            "WS handler must not return a value",
-                        ));
-                    }
-                    ws_method = Some(ident.clone());
+                    validate_ws_method(method)?;
+                    ws_method = Some(ident);
                 }
             }
         }
     }
 
-    Ok((
-        init_method,
-        http_method,
-        local_method,
-        remote_method,
-        ws_method,
-    ))
+    Ok((init_method, http_method, local_method, remote_method, ws_method))
 }
 
 #[proc_macro_attribute]
