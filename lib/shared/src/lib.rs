@@ -1,4 +1,4 @@
-use kinode_process_lib::Address;
+use hyperware_process_lib::Address;
 use process_macros::SerdeJsonInto;
 use serde::{Deserialize, Serialize};
 

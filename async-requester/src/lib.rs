@@ -1,11 +1,12 @@
-use kinode_process_lib::{kiprintln, Address};
+use hyperware_process_lib::kiprintln;
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{cronch, erect, send, Binding, SaveOptions, State};
-use kinode_app_common::{send_parallel_requests, SendResult};
-use kinode_process_lib::http::server::HttpBindingConfig;
+use hyperware_app_common::{hyper, hyperprocess, send, Binding, SaveOptions, State};
+use hyperware_app_common::{send_parallel_requests, SendResult};
+use hyperware_process_lib::http::server::HttpBindingConfig;
+use hyperware_process_lib::Address;
 use serde_json::Value;
-use shared::{receiver_address_b, receiver_address_c, AsyncRequest, AsyncResponse};
+use shared::{AsyncRequest, AsyncResponse};
 
 mod helpers;
 mod structs;
@@ -13,57 +14,58 @@ mod structs;
 use shared::receiver_address_a;
 use structs::*;
 
+fn sleep(secs: u64) {
+    std::thread::sleep(std::time::Duration::from_secs(2));
+}
+
 fn init_fn(_state: &mut ProcessState) {
     kiprintln!("Initializing Async Requester, sleeping 2 seconds...");
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    sleep(2);
 
-    // kiprintln!("--------------------------------");
-    // cronch!(
-    //     kiprintln!("Sending request to A");
-    //     let result: SendResult<AsyncResponse> = send(
-    //         AsyncRequest::StepA("Hello, world!".to_string()),
-    //         receiver_address_a(),
-    //         5
-    //     ).await;
-    //     match result {
-    //         SendResult::Success(AsyncResponse::StepA(res)) => kiprintln!("Step A: {}", res),
-    //         _ => kiprintln!("Unknown response"),
-    //     }
-    // );
+    hyper!(
+        sleep(0);
+        kiprintln!("Sending offline request...");
 
-    // kiprintln!("--------------------------------");
-    // kiprintln!("Sending a request that will offline");
-    // cronch!(
-    //     kiprintln!("Sending request to non-existent app");
-    //     let result: SendResult<AsyncResponse> = send(
-    //         AsyncRequest::StepA("Hello, world!".to_string()),
-    //         ("bigbooty.os", "something", "something", "uncentered.os").into(), // Doesn't exist
-    //         5
-    //     ).await;
-    //     kiprintln!("Result: {:#?}", result);
-    // );
+        let result: SendResult<AsyncResponse> = send(
+            AsyncRequest::StepA("Hello, world!".to_string()),
+            ("inexistent.os", "something", "something", "uncentered.os").into(), // Doesn't exist
+            5
+        ).await;
+        kiprintln!("Result: {:#?}", result);
+    );
 
-    kiprintln!("--------------------------------");
-    kiprintln!("Sleeping 1 more second");
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    let addresses: Vec<Address> = vec![
-        ("our", "something", "something", "uncentered.os").into(), // Doesn't exist
-        receiver_address_a(),
-        receiver_address_b(),
-        receiver_address_c(),
-        ("our", "something", "something", "uncentered.os").into(), // Doesn't exist
-    ];
-    let requests: Vec<AsyncRequest> = vec![
-        AsyncRequest::Gather("yes hello".to_string()),
-        AsyncRequest::Gather("yes hello".to_string()),
-        AsyncRequest::Gather("yes hello".to_string()),
-        AsyncRequest::Gather("yes hello".to_string()),
-        AsyncRequest::Gather("yes hello".to_string()),
-    ];
+    hyper!(
+        sleep(5);
+        kiprintln!("Sending working request to A...");
 
-    cronch! (
-        let results: Vec<SendResult<AsyncResponse>> = send_parallel_requests(addresses.clone(), requests, 5).await;
-        for (i, result) in results.into_iter().enumerate()  {
+        let result: SendResult<AsyncResponse> = send(
+            AsyncRequest::StepA("Hello, world!".to_string()),
+            receiver_address_a(),
+            5
+        ).await;
+        match result {
+            SendResult::Success(AsyncResponse::StepA(res)) => kiprintln!("Step A: {}", res),
+            _ => kiprintln!("Unknown response"),
+        }
+    );
+
+    hyper!(
+        sleep(10);
+        kiprintln!("Sending parallel requests...");
+
+        let results: Vec<SendResult<AsyncResponse>> = send_parallel_requests(
+            vec![
+                ("our", "something", "something", "uncentered.os").into(), // Doesn't exist
+                ("our", "async-receiver-a", "async-app", "uncentered.os").into(),
+                ("our", "async-receiver-b", "async-app", "uncentered.os").into(),
+                ("our", "async-receiver-c", "async-app", "uncentered.os").into(),
+                ("our", "something", "something", "uncentered.os").into(), // Doesn't exist
+            ],
+            vec![AsyncRequest::Gather("yes hello".to_string()); 5],
+            10
+        ).await;
+
+        for result in results {
             kiprintln!("Result {:#?}", result);
         }
     );
@@ -73,7 +75,8 @@ fn http_handler(_state: &mut ProcessState, path: &str, req: Value) {
     kiprintln!("Received HTTP request: {:#?}", req);
     kiprintln!("Path is {:#?}", path);
 }
-erect!(
+
+hyperprocess!(
     name: "Async Requester",
     icon: None,
     widget: None,
@@ -86,7 +89,7 @@ erect!(
     ],
     save_config: SaveOptions::EveryMessage,
     handlers: {
-        http: _,
+        http: http_handler,
         local: _,
         remote: _,
         ws: _,
@@ -95,7 +98,13 @@ erect!(
     wit_world: "async-app-template-dot-os-v0"
 );
 
-/*
-m our@async-requester:async-app:template.os '"abc"'
-curl -X POST -H "Content-Type: application/json" -d '{"message": "hello world"}' http://localhost:8080/async-requester:async-app:uncentered.os/api
-*/
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProcessState {
+    pub counter: u64,
+}
+
+impl State for ProcessState {
+    fn new() -> Self {
+        Self { counter: 0 }
+    }
+}

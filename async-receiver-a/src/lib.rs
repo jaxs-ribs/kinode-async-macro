@@ -1,9 +1,9 @@
-use kinode_process_lib::http::server::HttpServer;
-use kinode_process_lib::{kiprintln, Message, Response};
+use hyperware_process_lib::http::server::HttpServer;
+use hyperware_process_lib::{kiprintln, Message, Response};
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{erect, Binding, State, SaveOptions};
-use kinode_process_lib::http::server::HttpBindingConfig;
+use hyperware_app_common::{hyperprocess, Binding, State, SaveOptions};
+use hyperware_process_lib::http::server::HttpBindingConfig;
 use shared::{AsyncRequest, AsyncResponse};
 
 mod kino_local_handlers;
@@ -15,7 +15,7 @@ use structs::*;
 fn init_fn(_state: &mut AppState) {
 }
 
-erect!(
+hyperprocess!(
     name: "Async Receiver A",
     icon: None,
     widget: None,

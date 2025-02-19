@@ -1,15 +1,15 @@
-use kinode_process_lib::get_state;
-use kinode_process_lib::http::server::send_response;
-use kinode_process_lib::http::server::HttpServerRequest;
-use kinode_process_lib::http::server::WsMessageType;
-use kinode_process_lib::http::StatusCode;
-use kinode_process_lib::logging::info;
-use kinode_process_lib::logging::init_logging;
-use kinode_process_lib::logging::warn;
-use kinode_process_lib::logging::Level;
-use kinode_process_lib::Address;
-use kinode_process_lib::Request;
-use kinode_process_lib::SendErrorKind;
+use hyperware_process_lib::get_state;
+use hyperware_process_lib::http::server::send_response;
+use hyperware_process_lib::http::server::HttpServerRequest;
+use hyperware_process_lib::http::server::WsMessageType;
+use hyperware_process_lib::http::StatusCode;
+use hyperware_process_lib::logging::info;
+use hyperware_process_lib::logging::init_logging;
+use hyperware_process_lib::logging::warn;
+use hyperware_process_lib::logging::Level;
+use hyperware_process_lib::Address;
+use hyperware_process_lib::Request;
+use hyperware_process_lib::SendErrorKind;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -23,7 +23,7 @@ use std::task::{Context, Poll};
 use futures_util::task::noop_waker_ref;
 use uuid::Uuid;
 
-use kinode_process_lib::{
+use hyperware_process_lib::{
     await_message, homepage, http, kiprintln, set_state, LazyLoadBlob, Message, SendError,
 };
 
@@ -170,7 +170,7 @@ where
 }
 
 #[macro_export]
-macro_rules! cronch {
+macro_rules! hyper {
     ($($code:tt)*) => {
         $crate::EXECUTOR.with(|ex| {
             ex.borrow_mut().spawn(async move {
@@ -251,7 +251,7 @@ where
 }
 
 fn setup_server(
-    ui_config: Option<&kinode_process_lib::http::server::HttpBindingConfig>,
+    ui_config: Option<&hyperware_process_lib::http::server::HttpBindingConfig>,
     endpoints: &[Binding],
 ) -> http::server::HttpServer {
     let mut server = http::server::HttpServer::new(5);
@@ -337,7 +337,7 @@ pub fn app<S, T1, T2, T3>(
     app_name: &str,
     app_icon: Option<&str>,
     app_widget: Option<&str>,
-    ui_config: Option<kinode_process_lib::http::server::HttpBindingConfig>,
+    ui_config: Option<hyperware_process_lib::http::server::HttpBindingConfig>,
     endpoints: Vec<Binding>,
     save_config: SaveOptions,
     handle_api_call: impl Fn(&mut S, &str, T1),
@@ -559,7 +559,7 @@ macro_rules! __check_not_all_empty {
 
 // TODO: Rewrite the erect macro to use the new app function.
 #[macro_export]
-macro_rules! erect {
+macro_rules! hyperprocess {
     (
         name: $name:expr,
         icon: $icon:expr,
@@ -595,7 +595,7 @@ macro_rules! erect {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
-                use kinode_app_common::prelude::*;
+                use hyperware_app_common::prelude::*;
 
                 // Map `_` to the appropriate fallback function
                 let handle_http_api_call = $crate::__maybe!($http => $crate::no_http_api_call);
@@ -684,11 +684,11 @@ pub fn no_remote_request<S>(
 pub enum Binding {
     Http {
         path: &'static str,
-        config: kinode_process_lib::http::server::HttpBindingConfig,
+        config: hyperware_process_lib::http::server::HttpBindingConfig,
     },
     Ws {
         path: &'static str,
-        config: kinode_process_lib::http::server::WsBindingConfig,
+        config: hyperware_process_lib::http::server::WsBindingConfig,
     },
 }
 
