@@ -213,30 +213,68 @@ fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
 }
 
 fn validate_http_method(method: &syn::ImplItemFn) -> syn::Result<()> {
-    let spec = MethodSignatureSpec {
-        param_count: 3,
-        param_types: vec![
-            ("& str", "Second parameter must be &str"),
-        ],
-        handler_name: "HTTP",
-    };
-    validate_method_signature(method, spec)
+    if method.sig.inputs.len() != 2 {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "HTTP handler must take exactly two parameters: &mut self and req",
+        ));
+    }
+    // First parameter must be &mut self
+    if !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "First parameter must be &mut self",
+        ));
+    }
+    // No return type
+    if !matches!(method.sig.output, syn::ReturnType::Default) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "HTTP handler must not return a value",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_message_handler(method: &syn::ImplItemFn, handler_name: &str) -> syn::Result<()> {
-    let spec = MethodSignatureSpec {
-        param_count: 4,
-        param_types: vec![
-            ("& Message", "Second parameter must be &Message"),
-            ("& mut HttpServer", "Third parameter must be &mut HttpServer"),
-        ],
-        handler_name: match handler_name {
-            "Local" => "Local",
-            "Remote" => "Remote",
-            _ => "Message", // fallback, though this shouldn't happen
-        },
-    };
-    validate_method_signature(method, spec)
+    if method.sig.inputs.len() != 3 {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            format!(
+                "{} handler must take exactly three parameters: &mut self, &Message, and req",
+                handler_name
+            ),
+        ));
+    }
+    // First parameter must be &mut self
+    if !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "First parameter must be &mut self",
+        ));
+    }
+    // Second parameter must be &Message
+    if let syn::FnArg::Typed(pat) = &method.sig.inputs[1] {
+        if pat.ty.to_token_stream().to_string() != "& Message" {
+            return Err(syn::Error::new_spanned(
+                &method.sig.inputs[1],
+                "Second parameter must be &Message",
+            ));
+        }
+    } else {
+        return Err(syn::Error::new_spanned(
+            &method.sig.inputs[1],
+            "Second parameter must be a typed parameter",
+        ));
+    }
+    // No return type
+    if !matches!(method.sig.output, syn::ReturnType::Default) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            format!("{} handler must not return a value", handler_name),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_ws_method(method: &syn::ImplItemFn) -> syn::Result<()> {
@@ -334,19 +372,19 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let handle_http_code = if let Some(method_name) = http_method {
-        quote! { |state: &mut #self_ty, path: &str, req| state.#method_name(path, req) }
+        quote! { |state: &mut #self_ty, req| state.#method_name(req) }
     } else {
         quote! { no_http_api_call }
     };
 
     let handle_local_code = if let Some(method_name) = local_method {
-        quote! { |message: &Message, state: &mut #self_ty, server: &mut HttpServer, req| state.#method_name(message, server, req) }
+        quote! { |message: &Message, state: &mut #self_ty, req| state.#method_name(message, req) }
     } else {
         quote! { no_local_request }
     };
 
     let handle_remote_code = if let Some(method_name) = remote_method {
-        quote! { |message: &Message, state: &mut #self_ty, server: &mut HttpServer, req| state.#method_name(message, server, req) }
+        quote! { |message: &Message, state: &mut #self_ty, req| state.#method_name(message, req) }
     } else {
         quote! { no_remote_request }
     };

@@ -10,6 +10,7 @@ use hyperware_process_lib::logging::Level;
 use hyperware_process_lib::Address;
 use hyperware_process_lib::Request;
 use hyperware_process_lib::SendErrorKind;
+use hyperware_process_lib::http::server::HttpServer;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
@@ -41,6 +42,21 @@ thread_local! {
 
 thread_local! {
     pub static RESPONSE_REGISTRY: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
+}
+
+thread_local! {
+    static CURRENT_PATH: RefCell<Option<String>> = RefCell::new(None);
+    static CURRENT_SERVER: RefCell<Option<*mut HttpServer>> = RefCell::new(None);
+}
+
+// Access function for the current path
+pub fn get_path() -> String {
+    CURRENT_PATH.with(|cp| cp.borrow().as_ref().expect("Path not set").clone())
+}
+
+// Access function for the current server
+pub fn get_server() -> &'static mut HttpServer {
+    CURRENT_SERVER.with(|cs| unsafe { &mut *cs.borrow().expect("Server not set") })
 }
 
 pub struct Executor {
@@ -295,9 +311,9 @@ fn handle_message<S, T1, T2, T3>(
     message: Message,
     user_state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_api_call: &impl Fn(&mut S, &str, T1),
-    handle_local_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
-    handle_remote_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
+    handle_api_call: &impl Fn(&mut S, T1),
+    handle_local_request: &impl Fn(&Message, &mut S, T2),
+    handle_remote_request: &impl Fn(&Message, &mut S, T3),
     handle_ws: &impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
 ) where
     S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
@@ -339,9 +355,9 @@ pub fn app<S, T1, T2, T3>(
     ui_config: Option<hyperware_process_lib::http::server::HttpBindingConfig>,
     endpoints: Vec<Binding>,
     save_config: SaveOptions,
-    handle_api_call: impl Fn(&mut S, &str, T1),
-    handle_local_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T2),
-    handle_remote_request: impl Fn(&Message, &mut S, &mut http::server::HttpServer, T3),
+    handle_api_call: impl Fn(&mut S, T1),
+    handle_local_request: impl Fn(&Message, &mut S, T2),
+    handle_remote_request: impl Fn(&Message, &mut S, T3),
     handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
     init_fn: fn(&mut S),
 ) -> impl Fn()
@@ -404,7 +420,7 @@ fn http_request<S, T1>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_api_call: impl Fn(&mut S, &str, T1),
+    handle_api_call: impl Fn(&mut S, T1),
     handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
 ) where
     T1: serde::Serialize + serde::de::DeserializeOwned,
@@ -432,7 +448,9 @@ fn http_request<S, T1>(
                 return;
             };
 
-            handle_api_call(state, &path, deserialized_struct);
+            CURRENT_PATH.with(|cp| *cp.borrow_mut() = Some(path.clone()));
+            handle_api_call(state, deserialized_struct);
+            CURRENT_PATH.with(|cp| *cp.borrow_mut() = None);
         }
         HttpServerRequest::WebSocketPush {
             channel_id,
@@ -457,7 +475,7 @@ fn local_request<S, T>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_local_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T),
+    handle_local_request: &impl Fn(&Message, &mut S, T),
 ) where
     S: std::fmt::Debug,
     T: serde::Serialize + serde::de::DeserializeOwned,
@@ -472,14 +490,16 @@ fn local_request<S, T>(
         }
         return;
     };
-    handle_local_request(message, state, server, request);
+    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = Some(server as *mut HttpServer));
+    handle_local_request(message, state, request);
+    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = None);
 }
 
 fn remote_request<S, T>(
     message: &Message,
     state: &mut S,
     server: &mut http::server::HttpServer,
-    handle_remote_request: &impl Fn(&Message, &mut S, &mut http::server::HttpServer, T),
+    handle_remote_request: &impl Fn(&Message, &mut S, T),
 ) where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
@@ -489,7 +509,9 @@ fn remote_request<S, T>(
         warn!("Raw request body was: {:#?}", body_str);
         return;
     };
-    handle_remote_request(message, state, server, request);
+    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = Some(server as *mut HttpServer));
+    handle_remote_request(message, state, request);
+    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = None);
 }
 
 /// Pretty prints a SendError in a more readable format
@@ -547,100 +569,6 @@ fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, _user_st
     }
 }
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __check_not_all_empty {
-    (_, _, _, _, _) => {
-        compile_error!("At least one handler must be defined. Cannot use '_' for all handlers.");
-    };
-    ($($any:tt)*) => {};
-}
-
-// TODO: Rewrite the erect macro to use the new app function.
-#[macro_export]
-macro_rules! hyperprocess {
-    (
-        name: $name:expr,
-        icon: $icon:expr,
-        widget: $widget:expr,
-        ui: $ui:expr,
-        endpoints: [ $($endpoints:expr),* $(,)? ],
-        save_config: $save_config:expr,
-        handlers: {
-            http: $http:tt,
-            local: $local:tt,
-            remote: $remote:tt,
-            ws: $ws:tt,
-        },
-        init: $init:tt,
-        wit_world: $wit_world:expr
-        $(, additional_derives: [ $($additional_derives:path),* $(,)? ] )?
-        $(,)?
-    ) => {
-        wit_bindgen::generate!({
-            path: "target/wit",
-            world: $wit_world,
-            generate_unused_types: true,
-            additional_derives: [
-                serde::Deserialize,
-                serde::Serialize,
-                process_macros::SerdeJsonInto,
-                $($($additional_derives,)*)?
-            ],
-        });
-
-        $crate::__check_not_all_empty!($http, $local, $remote, $ws, $init);
-
-        struct Component;
-        impl Guest for Component {
-            fn init(_our: String) {
-                use hyperware_app_common::prelude::*;
-
-                // Map `_` to the appropriate fallback function
-                let handle_http_api_call = $crate::__maybe!($http => $crate::no_http_api_call);
-                let handle_local_request = $crate::__maybe!($local => $crate::no_local_request);
-                let handle_remote_request = $crate::__maybe!($remote => $crate::no_remote_request);
-                let handle_ws = $crate::__maybe!($ws => $crate::no_ws_handler);
-                let init_fn = $crate::__maybe!($init => $crate::no_init_fn);
-
-                // Build the vector of endpoints from user input
-                let endpoints_vec = vec![$($endpoints),*];
-
-                let closure = $crate::app(
-                    $name,
-                    $icon,
-                    $widget,
-                    $ui,
-                    endpoints_vec,
-                    $save_config,
-                    handle_http_api_call,
-                    handle_local_request,
-                    handle_remote_request,
-                    handle_ws,
-                    init_fn,
-                );
-                closure();
-            }
-        }
-        export!(Component);
-    };
-}
-
-// Re-export paste for use in our macros
-pub use paste;
-
-#[macro_export]
-macro_rules! __maybe {
-    // If the user wrote `_`, then expand to the default expression
-    ( _ => $default:expr ) => {
-        $default
-    };
-    // Otherwise use whatever they passed in
-    ( $actual:expr => $default:expr ) => {
-        $actual
-    };
-}
-
 // For demonstration, we'll define them all in one place.
 // Make sure the signatures match the real function signatures you require!
 pub fn no_init_fn<S>(_state: &mut S) {
@@ -657,14 +585,13 @@ pub fn no_ws_handler<S>(
     // does nothing
 }
 
-pub fn no_http_api_call<S>(_state: &mut S, _path: &str, _req: ()) {
+pub fn no_http_api_call<S>(_state: &mut S, _req: ()) {
     // does nothing
 }
 
 pub fn no_local_request<S>(
     _msg: &Message,
     _state: &mut S,
-    _server: &mut http::server::HttpServer,
     _req: (),
 ) {
     // does nothing
@@ -673,7 +600,6 @@ pub fn no_local_request<S>(
 pub fn no_remote_request<S>(
     _msg: &Message,
     _state: &mut S,
-    _server: &mut http::server::HttpServer,
     _req: (),
 ) {
     // does nothing
