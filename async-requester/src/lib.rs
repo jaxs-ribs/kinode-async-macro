@@ -4,19 +4,13 @@ use serde::{Deserialize, Serialize};
 use hyperware_app_common::{hyper, hyperprocess, send, Binding, SaveOptions, State};
 use hyperware_app_common::{send_parallel_requests, SendResult};
 use hyperware_process_lib::http::server::HttpBindingConfig;
-use hyperware_process_lib::Address;
 use serde_json::Value;
 use shared::{AsyncRequest, AsyncResponse};
 
-
-mod helpers;
-mod structs;
-
 use shared::receiver_address_a;
-use structs::*;
 
 fn sleep(secs: u64) {
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_secs(secs));
 }
 
 fn init_fn(_state: &mut ProcessState) {

@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, ItemImpl, Meta, Expr, spanned::Spanned, Attribute};
+use syn::{parse_macro_input, ItemImpl, Meta, Expr, spanned::Spanned};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 

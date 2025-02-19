@@ -12,7 +12,6 @@ use hyperware_process_lib::Request;
 use hyperware_process_lib::SendErrorKind;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -129,7 +128,7 @@ where
     let response_bytes = ResponseFuture::new(correlation_id).await;
     match serde_json::from_slice(&response_bytes) {
         Ok(result) => return SendResult::Success(result),
-        Err(e) => match serde_json::from_slice::<SendErrorKind>(&response_bytes) {
+        Err(_) => match serde_json::from_slice::<SendErrorKind>(&response_bytes) {
             Ok(kind) => match kind {
                 SendErrorKind::Offline => {
                     return SendResult::Offline;
