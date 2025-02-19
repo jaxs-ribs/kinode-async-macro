@@ -757,6 +757,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-requester-2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "hyperprocess_macro",
+ "hyperware_app_common",
+ "hyperware_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "shared",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -8,7 +8,6 @@ use hyperware_process_lib::Address;
 use serde_json::Value;
 use shared::{AsyncRequest, AsyncResponse};
 
-use hyperprocess_macro::hyperprocess_;
 
 mod helpers;
 mod structs;

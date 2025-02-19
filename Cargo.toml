@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "async-requester",
+    "async-requester-2",
     "async-receiver-a",
     "async-receiver-b",
     "async-receiver-c",
