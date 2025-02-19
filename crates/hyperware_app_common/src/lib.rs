@@ -50,13 +50,13 @@ thread_local! {
 }
 
 // Access function for the current path
-pub fn get_path() -> String {
-    CURRENT_PATH.with(|cp| cp.borrow().as_ref().expect("Path not set").clone())
+pub fn get_path() -> Option<String> {
+    CURRENT_PATH.with(|cp| cp.borrow().as_ref().cloned())
 }
 
 // Access function for the current server
-pub fn get_server() -> &'static mut HttpServer {
-    CURRENT_SERVER.with(|cs| unsafe { &mut *cs.borrow().expect("Server not set") })
+pub fn get_server() -> Option<&'static mut HttpServer> {
+    CURRENT_SERVER.with(|cs| cs.borrow().map(|ptr| unsafe { &mut *ptr }))
 }
 
 pub struct Executor {
