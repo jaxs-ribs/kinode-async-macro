@@ -9,16 +9,17 @@ use shared::{AsyncRequest, AsyncResponse};
 
 use shared::receiver_address_a;
 
-fn sleep(secs: u64) {
+fn _sleep(secs: u64) {
     std::thread::sleep(std::time::Duration::from_secs(secs));
 }
 
-fn init_fn(_state: &mut ProcessState) {
+fn init_fn(_state: &mut ProcessState) {}
+fn _actual_init_fn(_state: &mut ProcessState) {
     kiprintln!("Initializing Async Requester, sleeping 2 seconds...");
-    sleep(2);
+    _sleep(2);
 
     hyper!(
-        sleep(0);
+        _sleep(0);
         kiprintln!("Sending offline request...");
 
         let result: SendResult<AsyncResponse> = send(
@@ -30,7 +31,7 @@ fn init_fn(_state: &mut ProcessState) {
     );
 
     hyper!(
-        sleep(5);
+        _sleep(5);
         kiprintln!("Sending working request to A...");
 
         let result: SendResult<AsyncResponse> = send(
@@ -45,7 +46,7 @@ fn init_fn(_state: &mut ProcessState) {
     );
 
     hyper!(
-        sleep(10);
+        _sleep(10);
         kiprintln!("Sending parallel requests...");
 
         let results: Vec<SendResult<AsyncResponse>> = send_parallel_requests(
