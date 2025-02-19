@@ -2,7 +2,7 @@ use hyperware_process_lib::http::server::HttpServer;
 use hyperware_process_lib::{kiprintln, Message, Response};
 use serde::{Deserialize, Serialize};
 
-use hyperware_app_common::{hyperprocess, Binding, State, SaveOptions};
+use hyperware_app_common::{hyperprocess, Binding, SaveOptions, State};
 use hyperware_process_lib::http::server::HttpBindingConfig;
 use shared::{AsyncRequest, AsyncResponse};
 
@@ -12,8 +12,7 @@ mod structs;
 use kino_local_handlers::*;
 use structs::*;
 
-fn init_fn(_state: &mut AppState) {
-}
+fn init_fn(_state: &mut AppState) {}
 
 hyperprocess!(
     name: "Async Receiver A",

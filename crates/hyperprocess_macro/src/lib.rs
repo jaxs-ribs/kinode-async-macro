@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, ItemImpl, Meta, Expr, spanned::Spanned};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
+use syn::{parse_macro_input, spanned::Spanned, Expr, ItemImpl, Meta};
 
 // Create a newtype wrapper
 struct MetaList(Punctuated<Meta, Comma>);
@@ -51,7 +51,10 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
     let mut save_config = None;
     let mut wit_world = None;
 
-    let span = attr_args.0.first().map_or_else(|| proc_macro2::Span::call_site(), |arg| arg.span());
+    let span = attr_args
+        .0
+        .first()
+        .map_or_else(|| proc_macro2::Span::call_site(), |arg| arg.span());
 
     for arg in &attr_args.0 {
         if let Meta::NameValue(nv) = arg {
@@ -62,7 +65,10 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
                         if let syn::Lit::Str(lit) = &expr_lit.lit {
                             name = Some(lit.value());
                         } else {
-                            return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
+                            return Err(syn::Error::new(
+                                nv.value.span(),
+                                "Expected string literal",
+                            ));
                         }
                     } else {
                         return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
@@ -73,7 +79,10 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
                         if let syn::Lit::Str(lit) = &expr_lit.lit {
                             icon = Some(lit.value());
                         } else {
-                            return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
+                            return Err(syn::Error::new(
+                                nv.value.span(),
+                                "Expected string literal",
+                            ));
                         }
                     } else {
                         return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
@@ -84,7 +93,10 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
                         if let syn::Lit::Str(lit) = &expr_lit.lit {
                             widget = Some(lit.value());
                         } else {
-                            return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
+                            return Err(syn::Error::new(
+                                nv.value.span(),
+                                "Expected string literal",
+                            ));
                         }
                     } else {
                         return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
@@ -93,11 +105,20 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
                 "ui" => {
                     if let syn::Expr::Call(call) = &nv.value {
                         if let syn::Expr::Path(path) = &*call.func {
-                            if path.path.segments.last().map(|s| s.ident == "Some").unwrap_or(false) {
+                            if path
+                                .path
+                                .segments
+                                .last()
+                                .map(|s| s.ident == "Some")
+                                .unwrap_or(false)
+                            {
                                 if call.args.len() == 1 {
                                     ui = Some(call.args[0].clone());
                                 } else {
-                                    return Err(syn::Error::new(call.span(), "Some must have exactly one argument"));
+                                    return Err(syn::Error::new(
+                                        call.span(),
+                                        "Some must have exactly one argument",
+                                    ));
                                 }
                             }
                         }
@@ -112,7 +133,10 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
                         if let syn::Lit::Str(lit) = &expr_lit.lit {
                             wit_world = Some(lit.value());
                         } else {
-                            return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
+                            return Err(syn::Error::new(
+                                nv.value.span(),
+                                "Expected string literal",
+                            ));
                         }
                     } else {
                         return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
@@ -136,7 +160,15 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
     })
 }
 
-fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(Option<syn::Ident>, Option<syn::Ident>, Option<syn::Ident>, Option<syn::Ident>, Option<syn::Ident>)> {
+fn analyze_methods(
+    impl_block: &ItemImpl,
+) -> syn::Result<(
+    Option<syn::Ident>,
+    Option<syn::Ident>,
+    Option<syn::Ident>,
+    Option<syn::Ident>,
+    Option<syn::Ident>,
+)> {
     let mut init_method = None;
     let mut http_method = None;
     let mut local_method = None;
@@ -149,93 +181,189 @@ fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(Option<syn::Ident>, Op
                 let ident = method.sig.ident.clone();
                 if attr.path().is_ident("init") {
                     if init_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[init] methods defined"));
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "Multiple #[init] methods defined",
+                        ));
                     }
-                    if method.sig.inputs.len() != 1 || !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
-                        return Err(syn::Error::new_spanned(&method.sig, "Init method must take only &mut self"));
+                    if method.sig.inputs.len() != 1
+                        || !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_)))
+                    {
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "Init method must take only &mut self",
+                        ));
                     }
                     if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(&method.sig, "Init method must not return a value"));
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "Init method must not return a value",
+                        ));
                     }
                     init_method = Some(ident.clone());
                 } else if attr.path().is_ident("http") {
                     if http_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[http] methods defined"));
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "Multiple #[http] methods defined",
+                        ));
                     }
                     if method.sig.inputs.len() != 3 {
-                        return Err(syn::Error::new_spanned(&method.sig, "HTTP handler must take &mut self, &str, and a request type"));
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "HTTP handler must take &mut self, &str, and a request type",
+                        ));
                     }
                     match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "& str" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[1], "Second parameter must be &str")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string() == "& str" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[1],
+                                "Second parameter must be &str",
+                            ))
+                        }
                     }
                     if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(&method.sig, "HTTP handler must not return a value"));
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "HTTP handler must not return a value",
+                        ));
                     }
                     http_method = Some(ident.clone());
                 } else if attr.path().is_ident("local") {
                     if local_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[local] methods defined"));
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "Multiple #[local] methods defined",
+                        ));
                     }
                     if method.sig.inputs.len() != 4 {
                         return Err(syn::Error::new_spanned(&method.sig, "Local handler must take &mut self, &Message, &mut HttpServer, and a request type"));
                     }
                     match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "& Message" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[1], "Second parameter must be &Message")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string() == "& Message" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[1],
+                                "Second parameter must be &Message",
+                            ))
+                        }
                     }
                     match &method.sig.inputs[2] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "& mut HttpServer" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[2], "Third parameter must be &mut HttpServer")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string()
+                                == "& mut HttpServer" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[2],
+                                "Third parameter must be &mut HttpServer",
+                            ))
+                        }
                     }
                     if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(&method.sig, "Local handler must not return a value"));
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "Local handler must not return a value",
+                        ));
                     }
                     local_method = Some(ident.clone());
                 } else if attr.path().is_ident("remote") {
                     if remote_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[remote] methods defined"));
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "Multiple #[remote] methods defined",
+                        ));
                     }
                     if method.sig.inputs.len() != 4 {
                         return Err(syn::Error::new_spanned(&method.sig, "Remote handler must take &mut self, &Message, &mut HttpServer, and a request type"));
                     }
                     match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "& Message" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[1], "Second parameter must be &Message")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string() == "& Message" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[1],
+                                "Second parameter must be &Message",
+                            ))
+                        }
                     }
                     match &method.sig.inputs[2] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "& mut HttpServer" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[2], "Third parameter must be &mut HttpServer")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string()
+                                == "& mut HttpServer" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[2],
+                                "Third parameter must be &mut HttpServer",
+                            ))
+                        }
                     }
                     if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(&method.sig, "Remote handler must not return a value"));
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "Remote handler must not return a value",
+                        ));
                     }
                     remote_method = Some(ident.clone());
                 } else if attr.path().is_ident("ws") {
                     if ws_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[ws] methods defined"));
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "Multiple #[ws] methods defined",
+                        ));
                     }
                     if method.sig.inputs.len() != 5 {
                         return Err(syn::Error::new_spanned(&method.sig, "WS handler must take &mut self, &mut HttpServer, u32, WsMessageType, and LazyLoadBlob"));
                     }
                     match &method.sig.inputs[1] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "& mut HttpServer" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[1], "Second parameter must be &mut HttpServer")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string()
+                                == "& mut HttpServer" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[1],
+                                "Second parameter must be &mut HttpServer",
+                            ))
+                        }
                     }
                     match &method.sig.inputs[2] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "u32" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[2], "Third parameter must be u32")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string() == "u32" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[2],
+                                "Third parameter must be u32",
+                            ))
+                        }
                     }
                     match &method.sig.inputs[3] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "WsMessageType" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[3], "Fourth parameter must be WsMessageType")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string() == "WsMessageType" => {
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[3],
+                                "Fourth parameter must be WsMessageType",
+                            ))
+                        }
                     }
                     match &method.sig.inputs[4] {
-                        syn::FnArg::Typed(pat) if pat.ty.as_ref().to_token_stream().to_string() == "LazyLoadBlob" => {},
-                        _ => return Err(syn::Error::new_spanned(&method.sig.inputs[4], "Fifth parameter must be LazyLoadBlob")),
+                        syn::FnArg::Typed(pat)
+                            if pat.ty.as_ref().to_token_stream().to_string() == "LazyLoadBlob" => {}
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &method.sig.inputs[4],
+                                "Fifth parameter must be LazyLoadBlob",
+                            ))
+                        }
                     }
                     if !matches!(method.sig.output, syn::ReturnType::Default) {
-                        return Err(syn::Error::new_spanned(&method.sig, "WS handler must not return a value"));
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "WS handler must not return a value",
+                        ));
                     }
                     ws_method = Some(ident.clone());
                 }
@@ -243,7 +371,13 @@ fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(Option<syn::Ident>, Op
         }
     }
 
-    Ok((init_method, http_method, local_method, remote_method, ws_method))
+    Ok((
+        init_method,
+        http_method,
+        local_method,
+        remote_method,
+        ws_method,
+    ))
 }
 
 #[proc_macro_attribute]
@@ -258,10 +392,11 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let self_ty = &impl_block.self_ty;
 
-    let (init_method, http_method, local_method, remote_method, ws_method) = match analyze_methods(&impl_block) {
-        Ok(methods) => methods,
-        Err(e) => return e.to_compile_error().into(),
-    };
+    let (init_method, http_method, local_method, remote_method, ws_method) =
+        match analyze_methods(&impl_block) {
+            Ok(methods) => methods,
+            Err(e) => return e.to_compile_error().into(),
+        };
 
     let init_fn_code = if let Some(method_name) = init_method {
         quote! { |state: &mut #self_ty| state.#method_name() }
@@ -293,19 +428,31 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { no_ws_handler }
     };
 
-    let icon = args.icon.as_ref().map(|s| quote! { Some(#s) }).unwrap_or(quote! { None });
-    let widget = args.widget.as_ref().map(|s| quote! { Some(#s) }).unwrap_or(quote! { None });
-    let ui = args.ui.as_ref().map(|expr| quote! { Some(#expr) }).unwrap_or(quote! { None });
+    let icon = args
+        .icon
+        .as_ref()
+        .map(|s| quote! { Some(#s) })
+        .unwrap_or(quote! { None });
+    let widget = args
+        .widget
+        .as_ref()
+        .map(|s| quote! { Some(#s) })
+        .unwrap_or(quote! { None });
+    let ui = args
+        .ui
+        .as_ref()
+        .map(|expr| quote! { Some(#expr) })
+        .unwrap_or(quote! { None });
 
     let mut cleaned_impl_block = impl_block.clone();
     for item in &mut cleaned_impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
             method.attrs.retain(|attr| {
-                !attr.path().is_ident("init") &&
-                !attr.path().is_ident("http") &&
-                !attr.path().is_ident("local") &&
-                !attr.path().is_ident("remote") &&
-                !attr.path().is_ident("ws")
+                !attr.path().is_ident("init")
+                    && !attr.path().is_ident("http")
+                    && !attr.path().is_ident("local")
+                    && !attr.path().is_ident("remote")
+                    && !attr.path().is_ident("ws")
             });
         }
     }
