@@ -1,5 +1,5 @@
 use hyperware_process_lib::http::server::HttpServer;
-use hyperware_process_lib::{kiprintln, Message};
+use hyperware_process_lib::Message;
 use serde::{Deserialize, Serialize};
 
 use hyperware_app_common::{hyperprocess, Binding, SaveOptions, State};

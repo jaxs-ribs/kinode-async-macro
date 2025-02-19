@@ -78,5 +78,25 @@
             "homepage:homepage:sys"
         ],
         "public": true
+    },
+    {
+        "process_name": "hyperdriver",
+        "process_wasm_path": "/hyperdriver.wasm",
+        "on_exit": "None",
+        "request_networking": true,
+        "request_capabilities": [
+            "http-server:distro:sys",
+            "http-client:distro:sys",
+            "vfs:distro:sys",
+            "homepage:homepage:sys"
+
+        ],
+        "grant_capabilities": [
+            "http-server:distro:sys",
+            "http-client:distro:sys",
+            "vfs:distro:sys",
+            "homepage:homepage:sys"
+        ],
+        "public": true
     }
 ]

@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "async-requester",
-    "async-requester-2",
+    "hyperdriver",
     "async-receiver-a",
     "async-receiver-b",
     "async-receiver-c",

@@ -1,5 +1,5 @@
 [package]
-name = "async-requester-2"
+name = "hyperdriver"
 version = "0.1.0"
 edition = "2021"
 publish = false

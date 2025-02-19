@@ -13,7 +13,22 @@ fn _sleep(secs: u64) {
     std::thread::sleep(std::time::Duration::from_secs(secs));
 }
 
-fn init_fn(_state: &mut ProcessState) {}
+fn init_fn(_state: &mut ProcessState) {
+    hyper!(
+        kiprintln!("Sending working request to A...");
+
+        let result: SendResult<AsyncResponse> = send(
+            AsyncRequest::StepA("Hello, world!".to_string()),
+            ("our", "hyperdriver", "async-app", "uncentered.os").into(),
+            5
+        ).await;
+        match result {
+            SendResult::Success(AsyncResponse::StepA(res)) => kiprintln!("Step A: {}", res),
+            _ => kiprintln!("Unknown response"),
+        }
+    );
+}
+
 fn _actual_init_fn(_state: &mut ProcessState) {
     kiprintln!("Initializing Async Requester, sleeping 2 seconds...");
     _sleep(2);
