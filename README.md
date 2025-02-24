@@ -1,4 +1,4 @@
-# 🔥🚀🤘 Kinode Processes 2.0 🔥🚀🤘
+# 🔥🚀🤘 hyperware Processes 2.0 🔥🚀🤘
 
 Shoutout to Doria (@dr-frmr) for the initial app idea, this is just a lot of sugar on top.
 
@@ -17,9 +17,9 @@ Key Macros:
 The `erect!` macro is your main entry point.
 
 ```rust
-use kinode_app_common::{erect, Binding, State};
-use kinode_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
-use kinode_process_lib::{Message, kiprintln};
+use hyperware_app_common::{erect, Binding, State};
+use hyperware_process_lib::http::server::{HttpBindingConfig, WsBindingConfig};
+use hyperware_process_lib::{Message, kiprintln};
 
 fn init_fn(state: &mut MyState) {
     kiprintln!("Initializing My Cool Process!");
@@ -30,7 +30,7 @@ fn init_fn(state: &mut MyState) {
 fn my_local_handler(
     _message: &Message,
     _state: &mut MyState,
-    _server: &mut kinode_process_lib::http::server::HttpServer,
+    _server: &mut hyperware_process_lib::http::server::HttpServer,
     request: SomeLocalRequestType,
 ) {
     kiprintln!("Received local request: {:?}", request);
@@ -114,7 +114,7 @@ impl State for MyState {
 The declare_types! macro lets you define strongly typed request-response pairs. For example:
 
 ```rust
-use kinode_app_common::declare_types;
+use hyperware_app_common::declare_types;
 
 declare_types! {
     Async {
@@ -182,8 +182,8 @@ Once you have your request/response enums, you can easily invoke another process
 - Example (showing partial usage of optional timeout and callback):
 
 ```rust
-use kinode_process_lib::Address;
-use proc_macro_send::send_async; // re-export from kinode_app_common
+use hyperware_process_lib::Address;
+use proc_macro_send::send_async; // re-export from hyperware_app_common
 
 fn message_a(state: &mut MyState) {
     // We'll send "StepA" to the remote "Async Receiver A".
@@ -230,8 +230,8 @@ fn on_step_b(response: u64, state: &mut MyState) {
 Sometimes you want to send multiple requests in parallel, gather all responses, and then run a single callback. This is what the fan_out! macro does:
 
 ```rust
-use kinode_app_common::fan_out;
-use kinode_process_lib::Address;
+use hyperware_app_common::fan_out;
+use hyperware_process_lib::Address;
 
 fn fanout_message(state: &mut MyState) {
     let addresses: Vec<Address> = vec![
@@ -266,7 +266,7 @@ Once all requests are finished (or errored), the (all_results, st: MyState) { ..
 Easily schedule recurring or one-off timers with the timer! macro. For example:
 
 ```rust
-use kinode_app_common::timer;
+use hyperware_app_common::timer;
 
 fn repeated_timer(state: &mut MyState) {
     // Do something, e.g. log your current counter
@@ -336,7 +336,7 @@ sequenceDiagram
 The `SaveOptions` enum allows you to configure how your process's state is persisted:
 
 ```rust
-use kinode_app_common::SaveOptions;
+use hyperware_app_common::SaveOptions;
 
 erect!(
     // ... other config ...

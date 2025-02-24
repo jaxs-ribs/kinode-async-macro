@@ -1,50 +1,82 @@
-use kinode_process_lib::http::server::HttpServer;
-use kinode_process_lib::{kiprintln, Message};
+use hyperware_process_lib::kiprintln;
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{erect, fan_out, timer, Binding, State, SaveOptions};
-use kinode_process_lib::http::server::HttpBindingConfig;
-use kinode_process_lib::Address;
-use proc_macro_send::send_async;
+use hyperware_app_common::{hyper, hyperprocess, send, Binding, SaveOptions, State};
+use hyperware_app_common::{send_parallel_requests, SendResult};
+use hyperware_process_lib::http::server::HttpBindingConfig;
+use hyperware_process_lib::Address;
 use serde_json::Value;
-use shared::receiver_address_a;
+use shared::{AsyncRequest, AsyncResponse};
 
 mod helpers;
 mod structs;
 
-use helpers::*;
-use shared::*;
+use shared::receiver_address_a;
 use structs::*;
 
-fn init_fn(state: &mut ProcessState) {
-    kiprintln!("Initializing Async Requester");
-    repeated_timer(state);
-
-    std::thread::sleep(std::time::Duration::from_secs(4));
-    fanout_message();
+fn sleep(secs: u64) {
+    std::thread::sleep(std::time::Duration::from_secs(2));
 }
 
-/// This will get triggered with a terminal request
-/// For example, if you run `m our@async-requester:async-app:template.os '"abc"'`
-/// Then we will message the async receiver who will sleep 3s then answer.
-pub fn kino_local_handler(
-    _message: &Message,
-    _state: &mut ProcessState,
-    _server: &mut HttpServer,
-    _request: String,
-) {
-    message_a();
+fn init_fn(_state: &mut ProcessState) {
+    kiprintln!("Initializing Async Requester, sleeping 2 seconds...");
+    sleep(2);
+
+    hyper!(
+        sleep(0);
+        kiprintln!("Sending offline request...");
+
+        let result: SendResult<AsyncResponse> = send(
+            AsyncRequest::StepA("Hello, world!".to_string()),
+            ("inexistent.os", "something", "something", "uncentered.os").into(), // Doesn't exist
+            5
+        ).await;
+        kiprintln!("Result: {:#?}", result);
+    );
+
+    hyper!(
+        sleep(5);
+        kiprintln!("Sending working request to A...");
+
+        let result: SendResult<AsyncResponse> = send(
+            AsyncRequest::StepA("Hello, world!".to_string()),
+            receiver_address_a(),
+            5
+        ).await;
+        match result {
+            SendResult::Success(AsyncResponse::StepA(res)) => kiprintln!("Step A: {}", res),
+            _ => kiprintln!("Unknown response"),
+        }
+    );
+
+    hyper!(
+        sleep(10);
+        kiprintln!("Sending parallel requests...");
+
+        let results: Vec<SendResult<AsyncResponse>> = send_parallel_requests(
+            vec![
+                ("our", "something", "something", "uncentered.os").into(), // Doesn't exist
+                ("our", "async-receiver-a", "async-app", "uncentered.os").into(),
+                ("our", "async-receiver-b", "async-app", "uncentered.os").into(),
+                ("our", "async-receiver-c", "async-app", "uncentered.os").into(),
+                ("our", "something", "something", "uncentered.os").into(), // Doesn't exist
+            ],
+            vec![AsyncRequest::Gather("Unite!".to_string()); 5],
+            10
+        ).await;
+
+        for result in results {
+            kiprintln!("Result {:#?}", result);
+        }
+    );
 }
 
-fn http_handler(
-    _state: &mut ProcessState,
-    path: &str,
-    req: Value,
-) {
+fn http_handler(_state: &mut ProcessState, path: &str, req: Value) {
     kiprintln!("Received HTTP request: {:#?}", req);
     kiprintln!("Path is {:#?}", path);
 }
-erect!(
+
+hyperprocess!(
     name: "Async Requester",
     icon: None,
     widget: None,
@@ -58,7 +90,7 @@ erect!(
     save_config: SaveOptions::EveryMessage,
     handlers: {
         http: http_handler,
-        local: kino_local_handler,
+        local: _,
         remote: _,
         ws: _,
     },
@@ -66,7 +98,13 @@ erect!(
     wit_world: "async-app-template-dot-os-v0"
 );
 
-/*
-m our@async-requester:async-app:template.os '"abc"'
-curl -X POST -H "Content-Type: application/json" -d '{"message": "hello world"}' http://localhost:8080/async-requester:async-app:uncentered.os/api
-*/
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProcessState {
+    pub counter: u64,
+}
+
+impl State for ProcessState {
+    fn new() -> Self {
+        Self { counter: 0 }
+    }
+}

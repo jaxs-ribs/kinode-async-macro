@@ -1,22 +1,22 @@
-use kinode_process_lib::http::server::HttpServer;
-use kinode_process_lib::{kiprintln, Message};
+use hyperware_process_lib::http::server::HttpServer;
+use hyperware_process_lib::{kiprintln, Message};
 use serde::{Deserialize, Serialize};
 
-use kinode_app_common::{erect, Binding, State, SaveOptions};
-use kinode_process_lib::http::server::HttpBindingConfig;
-use kinode_process_lib::Response;
+use hyperware_app_common::{hyperprocess, Binding, State, SaveOptions};
+use hyperware_process_lib::http::server::HttpBindingConfig;
+use shared::{AsyncRequest, AsyncResponse};
+use hyperware_process_lib::Response;
+
 mod kino_local_handlers;
 mod structs;
 
 use kino_local_handlers::*;
-use shared::*;
 use structs::*;
 
 fn init_fn(_state: &mut AppState) {
-    kiprintln!("Initializing Async Receiver C");
 }
 
-erect!(
+hyperprocess!(
     name: "Async Receiver C",
     icon: None,
     widget: None,
@@ -27,7 +27,7 @@ erect!(
             config: HttpBindingConfig::default(),
         },
     ],
-    save_config: SaveOptions::Never,
+    save_config: SaveOptions::EveryMessage,
     handlers: {
         http: _,
         local: kino_local_handler,
