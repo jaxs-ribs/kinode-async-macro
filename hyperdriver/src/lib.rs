@@ -44,7 +44,7 @@ impl AsyncRequesterState {
     }
 
     #[http]
-    fn handle_http(&mut self, req: Value) {
+    fn handle_http(&mut self, message: &Message, req: Value) {
         let path = get_path();
         kiprintln!("Received HTTP request at path: {:?}", path);
         kiprintln!("Request: {:#?}", req);

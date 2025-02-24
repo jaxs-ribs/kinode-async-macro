@@ -213,27 +213,7 @@ fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
 }
 
 fn validate_http_method(method: &syn::ImplItemFn) -> syn::Result<()> {
-    if method.sig.inputs.len() != 2 {
-        return Err(syn::Error::new_spanned(
-            &method.sig,
-            "HTTP handler must take exactly two parameters: &mut self and req",
-        ));
-    }
-    // First parameter must be &mut self
-    if !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
-        return Err(syn::Error::new_spanned(
-            &method.sig,
-            "First parameter must be &mut self",
-        ));
-    }
-    // No return type
-    if !matches!(method.sig.output, syn::ReturnType::Default) {
-        return Err(syn::Error::new_spanned(
-            &method.sig,
-            "HTTP handler must not return a value",
-        ));
-    }
-    Ok(())
+    validate_message_handler(method, "HTTP")
 }
 
 fn validate_message_handler(method: &syn::ImplItemFn, handler_name: &str) -> syn::Result<()> {
@@ -306,44 +286,116 @@ fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(
 
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
+            let ident = method.sig.ident.clone();
+            let mut has_init = false;
+            let mut has_http = false;
+            let mut has_local = false;
+            let mut has_remote = false;
+            let mut has_ws = false;
+            
+            // Collect attributes for this method
             for attr in &method.attrs {
-                let ident = method.sig.ident.clone();
-                
                 if attr.path().is_ident("init") {
-                    if init_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[init] methods defined"));
-                    }
-                    validate_init_method(method)?;
-                    init_method = Some(ident);
+                    has_init = true;
                 } else if attr.path().is_ident("http") {
-                    if http_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[http] methods defined"));
-                    }
-                    validate_http_method(method)?;
-                    http_method = Some(ident);
+                    has_http = true;
                 } else if attr.path().is_ident("local") {
-                    if local_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[local] methods defined"));
-                    }
-                    validate_message_handler(method, "Local")?;
-                    local_method = Some(ident);
+                    has_local = true;
                 } else if attr.path().is_ident("remote") {
-                    if remote_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[remote] methods defined"));
-                    }
-                    validate_message_handler(method, "Remote")?;
-                    remote_method = Some(ident);
+                    has_remote = true;
                 } else if attr.path().is_ident("ws") {
-                    if ws_method.is_some() {
-                        return Err(syn::Error::new_spanned(attr, "Multiple #[ws] methods defined"));
-                    }
-                    validate_ws_method(method)?;
-                    ws_method = Some(ident);
+                    has_ws = true;
                 }
+            }
+            
+            // Validate init method (exclusive)
+            if has_init {
+                if has_http || has_local || has_remote || has_ws {
+                    return Err(syn::Error::new_spanned(
+                        method,
+                        "#[init] cannot be combined with other attributes"
+                    ));
+                }
+                
+                validate_init_method(method)?;
+                
+                if init_method.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        method,
+                        "Multiple #[init] methods defined"
+                    ));
+                }
+                
+                init_method = Some(ident);
+                continue;
+            }
+            
+            // Validate ws method (exclusive)
+            if has_ws {
+                if has_http || has_local || has_remote || has_init {
+                    return Err(syn::Error::new_spanned(
+                        method,
+                        "#[ws] cannot be combined with other attributes"
+                    ));
+                }
+                
+                validate_ws_method(method)?;
+                
+                if ws_method.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        method,
+                        "Multiple #[ws] methods defined"
+                    ));
+                }
+                
+                ws_method = Some(ident);
+                continue;
+            }
+            
+            // Validate http methods
+            if has_http {
+                validate_http_method(method)?;
+                
+                if http_method.is_some() && http_method != Some(ident.clone()) {
+                    return Err(syn::Error::new_spanned(
+                        method,
+                        "Multiple different #[http] methods defined"
+                    ));
+                }
+                
+                http_method = Some(ident.clone());
+            }
+            
+            // Validate local methods
+            if has_local {
+                validate_message_handler(method, "local")?;
+                
+                if local_method.is_some() && local_method != Some(ident.clone()) {
+                    return Err(syn::Error::new_spanned(
+                        method,
+                        "Multiple different #[local] methods defined"
+                    ));
+                }
+                
+                local_method = Some(ident.clone());
+            }
+            
+            // Validate remote methods
+            if has_remote {
+                validate_message_handler(method, "remote")?;
+                
+                if remote_method.is_some() && remote_method != Some(ident.clone()) {
+                    return Err(syn::Error::new_spanned(
+                        method,
+                        "Multiple different #[remote] methods defined"
+                    ));
+                }
+                
+                remote_method = Some(ident.clone());
             }
         }
     }
-
+    
     Ok((init_method, http_method, local_method, remote_method, ws_method))
 }
 
@@ -372,7 +424,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let handle_http_code = if let Some(method_name) = http_method {
-        quote! { |state: &mut #self_ty, req| state.#method_name(req) }
+        quote! { |state: &mut #self_ty, req| state.#method_name(&Message::default(), req) }
     } else {
         quote! { no_http_api_call }
     };
