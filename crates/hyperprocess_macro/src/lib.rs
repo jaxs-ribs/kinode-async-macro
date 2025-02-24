@@ -402,7 +402,7 @@ fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(
 #[proc_macro_attribute]
 pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr_args = parse_macro_input!(attr as MetaList);
-    let mut impl_block = parse_macro_input!(item as ItemImpl);
+    let impl_block = parse_macro_input!(item as ItemImpl);
 
     let args = match parse_args(attr_args) {
         Ok(args) => args,
@@ -423,8 +423,15 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { no_init_fn }
     };
 
+    // Modified to use a dummy/bogus message when calling the http handler
     let handle_http_code = if let Some(method_name) = http_method {
-        quote! { |state: &mut #self_ty, req| state.#method_name(&Message::default(), req) }
+        quote! { 
+            |state: &mut #self_ty, req| {
+                // Create a bogus message to pass to the handler
+                let dummy_msg = unsafe { std::mem::zeroed::<hyperware_process_lib::Message>() };
+                state.#method_name(&dummy_msg, req) 
+            }
+        }
     } else {
         quote! { no_http_api_call }
     };
@@ -504,6 +511,9 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                     no_ws_handler
                 };
                 use hyperware_process_lib::kiprintln;
+                use hyperware_process_lib::Message;
+                use hyperware_process_lib::http::server::{HttpServer, WsMessageType};
+                use hyperware_process_lib::LazyLoadBlob;
 
                 let init_fn = #init_fn_code;
                 let handle_http = #handle_http_code;
