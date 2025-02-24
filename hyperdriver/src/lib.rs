@@ -74,4 +74,7 @@ TODO:
 - Test whether the init function prints properly and gets everything
 - Test whether the ws handler works
 - Declare a good combo of local, remote, and http handlers and test that they work
+
+- Move the new functions over to the proc macro
+- Move as much from the common to a utils.rs file, everything that won't get `quote`d
 */
