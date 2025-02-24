@@ -68,3 +68,10 @@ impl AsyncRequesterState {
 m our@hyperdriver:async-app:uncentered.os '"abc"'
 curl -X POST -H "Content-Type: application/json" -d '{"message": "hello world"}' http://localhost:8080/hyperdriver:async-app:uncentered.os/api
 */
+
+/*
+TODO: 
+- Test whether the init function prints properly and gets everything
+- Test whether the ws handler works
+- Declare a good combo of local, remote, and http handlers and test that they work
+*/
