@@ -271,17 +271,18 @@ fn validate_ws_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     validate_method_signature(method, spec)
 }
 
+// Modified to return vectors of method identifiers instead of single options
 fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(
     Option<syn::Ident>,
-    Option<syn::Ident>,
-    Option<syn::Ident>,
-    Option<syn::Ident>,
+    Vec<syn::Ident>,
+    Vec<syn::Ident>,
+    Vec<syn::Ident>,
     Option<syn::Ident>,
 )> {
     let mut init_method = None;
-    let mut http_method = None;
-    let mut local_method = None;
-    let mut remote_method = None;
+    let mut http_methods = Vec::new();
+    let mut local_methods = Vec::new();
+    let mut remote_methods = Vec::new();
     let mut ws_method = None;
 
     for item in &impl_block.items {
@@ -352,51 +353,28 @@ fn analyze_methods(impl_block: &ItemImpl) -> syn::Result<(
                 continue;
             }
             
-            // Validate http methods
+            // Add to appropriate vectors - a method can be in multiple vectors if it has multiple attributes
+            // Validate http methods and add to the vector
             if has_http {
                 validate_http_method(method)?;
-                
-                if http_method.is_some() && http_method != Some(ident.clone()) {
-                    return Err(syn::Error::new_spanned(
-                        method,
-                        "Multiple different #[http] methods defined"
-                    ));
-                }
-                
-                http_method = Some(ident.clone());
+                http_methods.push(ident.clone());
             }
             
-            // Validate local methods
+            // Validate local methods and add to the vector
             if has_local {
                 validate_message_handler(method, "local")?;
-                
-                if local_method.is_some() && local_method != Some(ident.clone()) {
-                    return Err(syn::Error::new_spanned(
-                        method,
-                        "Multiple different #[local] methods defined"
-                    ));
-                }
-                
-                local_method = Some(ident.clone());
+                local_methods.push(ident.clone());
             }
             
-            // Validate remote methods
+            // Validate remote methods and add to the vector
             if has_remote {
                 validate_message_handler(method, "remote")?;
-                
-                if remote_method.is_some() && remote_method != Some(ident.clone()) {
-                    return Err(syn::Error::new_spanned(
-                        method,
-                        "Multiple different #[remote] methods defined"
-                    ));
-                }
-                
-                remote_method = Some(ident.clone());
+                remote_methods.push(ident.clone());
             }
         }
     }
     
-    Ok((init_method, http_method, local_method, remote_method, ws_method))
+    Ok((init_method, http_methods, local_methods, remote_methods, ws_method))
 }
 
 #[proc_macro_attribute]
@@ -411,7 +389,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let self_ty = &impl_block.self_ty;
 
-    let (init_method, http_method, local_method, remote_method, ws_method) =
+    let (init_method, http_methods, local_methods, remote_methods, ws_method) =
         match analyze_methods(&impl_block) {
             Ok(methods) => methods,
             Err(e) => return e.to_compile_error().into(),
@@ -423,31 +401,72 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { no_init_fn }
     };
 
-    // Modified to use a dummy/bogus message when calling the http handler
-    let handle_http_code = if let Some(method_name) = http_method {
+    // Generate code for HTTP handlers that properly handles ownership
+    let handle_http_code = if !http_methods.is_empty() {
+        let method_calls = http_methods.iter().enumerate().map(|(i, method_name)| {
+            if i < http_methods.len() - 1 {
+                // Clone for all but the last one
+                quote! { state.#method_name(&dummy_msg, req.clone()); }
+            } else {
+                // Consume the original for the last one
+                quote! { state.#method_name(&dummy_msg, req); }
+            }
+        }).collect::<Vec<_>>();
+
         quote! { 
-            |state: &mut #self_ty, req| {
+            |state: &mut #self_ty, req: serde_json::Value| {
                 // Create a bogus message to pass to the handler
                 let dummy_msg = unsafe { std::mem::zeroed::<hyperware_process_lib::Message>() };
-                state.#method_name(&dummy_msg, req) 
+                #(#method_calls)*
             }
         }
     } else {
         quote! { no_http_api_call }
     };
 
-    let handle_local_code = if let Some(method_name) = local_method {
-        quote! { |message: &Message, state: &mut #self_ty, req| state.#method_name(message, req) }
+    // Generate code for local message handlers
+    let handle_local_code = if !local_methods.is_empty() {
+        let method_calls = local_methods.iter().enumerate().map(|(i, method_name)| {
+            if i < local_methods.len() - 1 {
+                // Clone for all but the last one
+                quote! { state.#method_name(message, req.clone()); }
+            } else {
+                // Consume the original for the last one
+                quote! { state.#method_name(message, req); }
+            }
+        }).collect::<Vec<_>>();
+
+        quote! { 
+            |message: &Message, state: &mut #self_ty, req: serde_json::Value| {
+                #(#method_calls)*
+            }
+        }
     } else {
         quote! { no_local_request }
     };
 
-    let handle_remote_code = if let Some(method_name) = remote_method {
-        quote! { |message: &Message, state: &mut #self_ty, req| state.#method_name(message, req) }
+    // Generate code for remote message handlers
+    let handle_remote_code = if !remote_methods.is_empty() {
+        let method_calls = remote_methods.iter().enumerate().map(|(i, method_name)| {
+            if i < remote_methods.len() - 1 {
+                // Clone for all but the last one
+                quote! { state.#method_name(message, req.clone()); }
+            } else {
+                // Consume the original for the last one
+                quote! { state.#method_name(message, req); }
+            }
+        }).collect::<Vec<_>>();
+
+        quote! { 
+            |message: &Message, state: &mut #self_ty, req: serde_json::Value| {
+                #(#method_calls)*
+            }
+        }
     } else {
         quote! { no_remote_request }
     };
 
+    // WebSocket handler remains the same since only one is allowed
     let handle_ws_code = if let Some(method_name) = ws_method {
         quote! { |state: &mut #self_ty, server: &mut HttpServer, channel_id: u32, msg_type: WsMessageType, blob: LazyLoadBlob| state.#method_name(server, channel_id, msg_type, blob) }
     } else {
@@ -514,6 +533,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                 use hyperware_process_lib::Message;
                 use hyperware_process_lib::http::server::{HttpServer, WsMessageType};
                 use hyperware_process_lib::LazyLoadBlob;
+                use serde_json::Value;
 
                 let init_fn = #init_fn_code;
                 let handle_http = #handle_http_code;
