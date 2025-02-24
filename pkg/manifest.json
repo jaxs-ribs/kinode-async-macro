@@ -9,7 +9,6 @@
             "http-client:distro:sys",
             "vfs:distro:sys",
             "homepage:homepage:sys"
-
         ],
         "grant_capabilities": [
             "http-server:distro:sys",

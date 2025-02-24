@@ -61,7 +61,7 @@ fn init_fn(_state: &mut ProcessState) {
                 ("our", "async-receiver-c", "async-app", "uncentered.os").into(),
                 ("our", "something", "something", "uncentered.os").into(), // Doesn't exist
             ],
-            vec![AsyncRequest::Gather("yes hello".to_string()); 5],
+            vec![AsyncRequest::Gather("Unite!".to_string()); 5],
             10
         ).await;
 
