@@ -1,9 +1,9 @@
 // src/lib.rs
 use hyperprocess_macro::hyperprocess;
-use hyperware_app_common::{get_path, get_server, Binding, SaveOptions, State};
+use hyperware_app_common::{get_path, get_server, State};
 use hyperware_process_lib::kiprintln;
 use hyperware_process_lib::{
-    http::server::{HttpBindingConfig, HttpServerRequest},
+    http::server::HttpBindingConfig,
     Message,
 };
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ impl AsyncRequesterState {
 
     #[http]
     #[local]
-    fn handle_http(&mut self, message: &Message, req: Value) {
+    fn handle_http(&mut self, _message: &Message, req: Value) {
         let path = get_path();
         kiprintln!("Received HTTP request at path: {:?}", path);
         kiprintln!("Request: {:#?}", req);

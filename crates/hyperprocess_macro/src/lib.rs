@@ -4,9 +4,6 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{parse_macro_input, spanned::Spanned, Expr, ItemImpl, Meta};
 
-// Only keep the imports that are actually used
-use hyperware_app_common::prelude::*;
-
 // Create a newtype wrapper
 struct MetaList(Punctuated<Meta, Comma>);
 
