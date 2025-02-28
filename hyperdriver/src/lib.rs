@@ -37,8 +37,22 @@ impl AsyncRequesterState {
     #[local]
     fn increment_counter(&mut self, value: i32, another_value: String, yet_another_value: f32) -> String {
         self.request_count += 1;
+        kiprintln!("--------------------------------");
         kiprintln!("We have been called with thes following values: {:?}, {:?}, {:?}", value, another_value, yet_another_value);
+        kiprintln!("Our counter is now {}", self.request_count);
+        kiprintln!("--------------------------------");
         "some string".to_string()
+    }
+
+    #[local]
+    fn increment_counter_2(&mut self, value: f64, another_value: Vec<String>, yet_another_value: bool) -> Vec<i32> {
+        self.request_count += 1;
+        kiprintln!("--------------------------------");
+        kiprintln!("We have been called with thes following values: {:?}, {:?}, {:?}", value, another_value, yet_another_value);
+        kiprintln!("Our counter is now {}", self.request_count);
+        kiprintln!("--------------------------------");
+        "some string".to_string();
+        vec![42, 43, 44]
     }
 
     #[remote]
@@ -58,6 +72,6 @@ impl AsyncRequesterState {
 
 /*
 We want to be able to handle an arbitrary number of parameters for a request.
-m our@hyperdriver:async-app:template.os '"abc"'
 m our@hyperdriver:async-app:uncentered.os '{"IncrementCounter": [42, "abc", 3.14]}'
+m our@hyperdriver:async-app:uncentered.os '{"IncrementCounter2": [42.0, ["abc", "def"], true]}'
 */

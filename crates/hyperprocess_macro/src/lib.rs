@@ -1,23 +1,23 @@
 #![allow(warnings)] // TODO: Zena: Remove this and fix warnings
+
+//! # HyperProcess Procedural Macro
+//! 
+//! This macro generates boilerplate code for HyperProcess applications,
+//! analyzing method attributes to create appropriate request/response handling.
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
-use syn::punctuated::Punctuated;
-use syn::token::Comma;
-use syn::{parse_macro_input, spanned::Spanned, Expr, ItemImpl, Meta, ReturnType};
+use syn::{
+    parse_macro_input, spanned::Spanned, 
+    Expr, ItemImpl, Meta, ReturnType,
+    punctuated::Punctuated, token::Comma,
+};
 
-// Create a newtype wrapper
-struct MetaList(Punctuated<Meta, Comma>);
+//------------------------------------------------------------------------------
+// Type Definitions
+//------------------------------------------------------------------------------
 
-struct HyperProcessArgs {
-    name: String,
-    icon: Option<String>,
-    widget: Option<String>,
-    ui: Option<Expr>,
-    endpoints: Expr,
-    save_config: Expr,
-    wit_world: String,
-}
-
+/// Keywords for parsing attribute arguments
 mod kw {
     syn::custom_keyword!(name);
     syn::custom_keyword!(icon);
@@ -28,7 +28,21 @@ mod kw {
     syn::custom_keyword!(wit_world);
 }
 
-// Function metadata structure
+/// A wrapper for a punctuated list of Meta items
+struct MetaList(Punctuated<Meta, Comma>);
+
+/// Arguments for the hyperprocess macro
+struct HyperProcessArgs {
+    name: String,
+    icon: Option<String>,
+    widget: Option<String>,
+    ui: Option<Expr>,
+    endpoints: Expr,
+    save_config: Expr,
+    wit_world: String,
+}
+
+/// Metadata for a function in the implementation block
 struct FunctionMetadata {
     name: syn::Ident,                // Original function name
     variant_name: String,            // CamelCase variant name
@@ -40,7 +54,52 @@ struct FunctionMetadata {
     is_http: bool,                   // Has #[http] attribute
 }
 
-// Implement Parse for our newtype wrapper
+//------------------------------------------------------------------------------
+// Utility Functions
+//------------------------------------------------------------------------------
+
+/// Convert a snake_case string to CamelCase
+fn to_camel_case(snake: &str) -> String {
+    let mut camel = String::new();
+    let mut capitalize_next = true;
+    
+    for c in snake.chars() {
+        if c == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            camel.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            camel.push(c);
+        }
+    }
+    
+    camel
+}
+
+/// Parse a string literal from an expression
+fn parse_string_literal(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String> {
+    if let Expr::Lit(expr_lit) = expr {
+        if let syn::Lit::Str(lit) = &expr_lit.lit {
+            Ok(lit.value())
+        } else {
+            Err(syn::Error::new(span, "Expected string literal"))
+        }
+    } else {
+        Err(syn::Error::new(span, "Expected string literal"))
+    }
+}
+
+/// Check if a method has a specific attribute
+fn has_attribute(method: &syn::ImplItemFn, attr_name: &str) -> bool {
+    method.attrs.iter().any(|attr| attr.path().is_ident(attr_name))
+}
+
+//------------------------------------------------------------------------------
+// Parsing Implementation
+//------------------------------------------------------------------------------
+
+/// Implement Parse for our MetaList newtype wrapper
 impl syn::parse::Parse for MetaList {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut args = Punctuated::new();
@@ -55,6 +114,7 @@ impl syn::parse::Parse for MetaList {
     }
 }
 
+/// Parse the arguments to the hyperprocess macro
 fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
     let mut name = None;
     let mut icon = None;
@@ -74,50 +134,17 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
             let key = nv.path.get_ident().unwrap().to_string();
             match key.as_str() {
                 "name" => {
-                    if let syn::Expr::Lit(expr_lit) = &nv.value {
-                        if let syn::Lit::Str(lit) = &expr_lit.lit {
-                            name = Some(lit.value());
-                        } else {
-                            return Err(syn::Error::new(
-                                nv.value.span(),
-                                "Expected string literal",
-                            ));
-                        }
-                    } else {
-                        return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
-                    }
+                    name = Some(parse_string_literal(&nv.value, nv.value.span())?);
                 }
                 "icon" => {
-                    if let syn::Expr::Lit(expr_lit) = &nv.value {
-                        if let syn::Lit::Str(lit) = &expr_lit.lit {
-                            icon = Some(lit.value());
-                        } else {
-                            return Err(syn::Error::new(
-                                nv.value.span(),
-                                "Expected string literal",
-                            ));
-                        }
-                    } else {
-                        return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
-                    }
+                    icon = Some(parse_string_literal(&nv.value, nv.value.span())?);
                 }
                 "widget" => {
-                    if let syn::Expr::Lit(expr_lit) = &nv.value {
-                        if let syn::Lit::Str(lit) = &expr_lit.lit {
-                            widget = Some(lit.value());
-                        } else {
-                            return Err(syn::Error::new(
-                                nv.value.span(),
-                                "Expected string literal",
-                            ));
-                        }
-                    } else {
-                        return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
-                    }
+                    widget = Some(parse_string_literal(&nv.value, nv.value.span())?);
                 }
                 "ui" => {
-                    if let syn::Expr::Call(call) = &nv.value {
-                        if let syn::Expr::Path(path) = &*call.func {
+                    if let Expr::Call(call) = &nv.value {
+                        if let Expr::Path(path) = &*call.func {
                             if path
                                 .path
                                 .segments
@@ -142,18 +169,7 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
                 "endpoints" => endpoints = Some(nv.value.clone()),
                 "save_config" => save_config = Some(nv.value.clone()),
                 "wit_world" => {
-                    if let syn::Expr::Lit(expr_lit) = &nv.value {
-                        if let syn::Lit::Str(lit) = &expr_lit.lit {
-                            wit_world = Some(lit.value());
-                        } else {
-                            return Err(syn::Error::new(
-                                nv.value.span(),
-                                "Expected string literal",
-                            ));
-                        }
-                    } else {
-                        return Err(syn::Error::new(nv.value.span(), "Expected string literal"));
-                    }
+                    wit_world = Some(parse_string_literal(&nv.value, nv.value.span())?);
                 }
                 _ => return Err(syn::Error::new(nv.path.span(), "Unknown attribute")),
             }
@@ -173,26 +189,11 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
     })
 }
 
-// Helper function to convert snake_case to CamelCase
-fn to_camel_case(snake: &str) -> String {
-    let mut camel = String::new();
-    let mut capitalize_next = true;
-    
-    for c in snake.chars() {
-        if c == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            camel.push(c.to_ascii_uppercase());
-            capitalize_next = false;
-        } else {
-            camel.push(c);
-        }
-    }
-    
-    camel
-}
+//------------------------------------------------------------------------------
+// Method Validation Functions
+//------------------------------------------------------------------------------
 
-// Validation function for init method
+/// Validate the init method signature
 fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     // Ensure first param is &mut self
     if method.sig.inputs.is_empty() || !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
@@ -211,7 +212,7 @@ fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     }
 
     // Validate return type
-    if !matches!(method.sig.output, syn::ReturnType::Default) {
+    if !matches!(method.sig.output, ReturnType::Default) {
         return Err(syn::Error::new_spanned(
             &method.sig,
             "Init method must not return a value",
@@ -221,7 +222,7 @@ fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     Ok(())
 }
 
-// Validation function for our request-response style functions
+/// Validate a request-response function signature
 fn validate_request_response_function(method: &syn::ImplItemFn) -> syn::Result<()> {
     // Ensure first param is &mut self
     if method.sig.inputs.is_empty() || !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
@@ -230,15 +231,18 @@ fn validate_request_response_function(method: &syn::ImplItemFn) -> syn::Result<(
             "Request-response handlers must take &mut self as their first parameter",
         ));
     }
-
-    // No limit on additional parameters anymore - we support any number
     
+    // No limit on additional parameters - we support any number
     // No validation for return type - any return type is allowed
     
     Ok(())
 }
 
-// Analyze methods, validating and collecting metadata
+//------------------------------------------------------------------------------
+// Method Analysis Functions
+//------------------------------------------------------------------------------
+
+/// Analyze the methods in an implementation block
 fn analyze_methods(
     impl_block: &ItemImpl,
 ) -> syn::Result<(
@@ -253,26 +257,13 @@ fn analyze_methods(
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
             let ident = method.sig.ident.clone();
-            let mut has_init = false;
-            let mut has_http = false;
-            let mut has_local = false;
-            let mut has_remote = false;
-            let mut has_ws = false;
-
-            // Collect attributes for this method
-            for attr in &method.attrs {
-                if attr.path().is_ident("init") {
-                    has_init = true;
-                } else if attr.path().is_ident("http") {
-                    has_http = true;
-                } else if attr.path().is_ident("local") {
-                    has_local = true;
-                } else if attr.path().is_ident("remote") {
-                    has_remote = true;
-                } else if attr.path().is_ident("ws") {
-                    has_ws = true;
-                }
-            }
+            
+            // Check for method attributes
+            let has_init = has_attribute(method, "init");
+            let has_http = has_attribute(method, "http");
+            let has_local = has_attribute(method, "local");
+            let has_remote = has_attribute(method, "remote");
+            let has_ws = has_attribute(method, "ws");
 
             // Handle init method
             if has_init {
@@ -293,7 +284,7 @@ fn analyze_methods(
                 continue;
             }
 
-            // We're ignoring WS handlers for now, but keeping the placeholder
+            // Handle WebSocket method
             if has_ws {
                 if has_http || has_local || has_remote || has_init {
                     return Err(syn::Error::new_spanned(
@@ -315,38 +306,12 @@ fn analyze_methods(
             // Handle request-response methods
             if has_http || has_local || has_remote {
                 validate_request_response_function(method)?;
-                
-                // Extract parameter types (skipping &mut self)
-                let mut params = Vec::new();
-                for input in method.sig.inputs.iter().skip(1) {
-                    if let syn::FnArg::Typed(pat_type) = input {
-                        params.push((*pat_type.ty).clone());
-                    }
-                }
-
-                // Extract return type
-                let return_type = match &method.sig.output {
-                    syn::ReturnType::Default => None, // () - no explicit return
-                    syn::ReturnType::Type(_, ty) => Some((**ty).clone()),
-                };
-
-                // Check if function is async
-                let is_async = method.sig.asyncness.is_some();
-
-                // Create variant name (snake_case to CamelCase)
-                let variant_name = to_camel_case(&ident.to_string());
-                
-                // Create function metadata and add to collection
-                function_metadata.push(FunctionMetadata {
-                    name: ident.clone(),
-                    variant_name,
-                    params,
-                    return_type,
-                    is_async,
-                    is_local: has_local,
-                    is_remote: has_remote,
-                    is_http: has_http,
-                });
+                function_metadata.push(extract_function_metadata(
+                    method, 
+                    has_local, 
+                    has_remote, 
+                    has_http
+                ));
             }
         }
     }
@@ -354,98 +319,118 @@ fn analyze_methods(
     Ok((init_method, ws_method, function_metadata))
 }
 
-#[proc_macro_attribute]
-pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr_args = parse_macro_input!(attr as MetaList);
-    let impl_block = parse_macro_input!(item as ItemImpl);
+/// Extract metadata from a function
+fn extract_function_metadata(
+    method: &syn::ImplItemFn,
+    is_local: bool,
+    is_remote: bool,
+    is_http: bool,
+) -> FunctionMetadata {
+    let ident = method.sig.ident.clone();
+    
+    // Extract parameter types (skipping &mut self)
+    let params = method.sig.inputs.iter()
+        .skip(1)
+        .filter_map(|input| {
+            if let syn::FnArg::Typed(pat_type) = input {
+                Some((*pat_type.ty).clone())
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    let args = match parse_args(attr_args) {
-        Ok(args) => args,
-        Err(e) => return e.to_compile_error().into(),
+    // Extract return type
+    let return_type = match &method.sig.output {
+        ReturnType::Default => None, // () - no explicit return
+        ReturnType::Type(_, ty) => Some((**ty).clone()),
     };
 
-    let self_ty = &impl_block.self_ty;
-
-    // Analyze methods, only collecting init, ws and our new style handlers
-    let (init_method, ws_method, function_metadata) =
-        match analyze_methods(&impl_block) {
-            Ok(methods) => methods,
-            Err(e) => return e.to_compile_error().into(),
-        };
-
-    // Generate Request and Response enums
-    let (request_enum, response_enum) = if !function_metadata.is_empty() {
-        // Request enum variants
-        let request_variants = function_metadata.iter().map(|func| {
-            let variant_name = format_ident!("{}", &func.variant_name);
-            
-            if func.params.is_empty() {
-                // Unit variant for functions with no parameters
-                quote! { #variant_name }
-            } else if func.params.len() == 1 {
-                // Simple tuple variant for single parameter
-                let param_type = &func.params[0];
-                quote! { #variant_name(#param_type) }
-            } else {
-                // Tuple variant with multiple types for multiple parameters
-                let param_types = &func.params;
-                quote! { #variant_name(#(#param_types),*) }
-            }
-        });
-
-        // Response enum variants
-        let response_variants = function_metadata.iter().map(|func| {
-            let variant_name = format_ident!("{}", &func.variant_name);
-            
-            if let Some(return_type) = &func.return_type {
-                let type_str = return_type.to_token_stream().to_string();
-                if type_str == "()" {
-                    // Unit variant for () return type
-                    quote! { #variant_name }
-                } else {
-                    // Tuple variant with return type
-                    quote! { #variant_name(#return_type) }
-                }
-            } else {
-                // Unit variant for no explicit return
-                quote! { #variant_name }
-            }
-        });
-
-        // Generate the enum definitions with serialization derives
-        (
-            quote! {
-                #[derive(Debug, serde::Serialize, serde::Deserialize)]
-                enum Request {
-                    #(#request_variants),*
-                }
-            },
-            quote! {
-                #[derive(Debug, serde::Serialize, serde::Deserialize)]
-                enum Response {
-                    #(#response_variants),*
-                }
-            }
-        )
-    } else {
-        // No function metadata, so no enums needed
-        (quote! {}, quote! {})
-    };
-
-    // Split functions by handler type
-    let local_handlers: Vec<_> = function_metadata.iter()
-        .filter(|f| f.is_local)
-        .collect();
+    // Create variant name (snake_case to CamelCase)
+    let variant_name = to_camel_case(&ident.to_string());
     
-    let remote_handlers: Vec<_> = function_metadata.iter()
-        .filter(|f| f.is_remote)
-        .collect();
-    
-    let http_handlers: Vec<_> = function_metadata.iter()
-        .filter(|f| f.is_http)
-        .collect();
+    FunctionMetadata {
+        name: ident,
+        variant_name,
+        params,
+        return_type,
+        is_async: method.sig.asyncness.is_some(),
+        is_local,
+        is_remote,
+        is_http,
+    }
+}
+
+//------------------------------------------------------------------------------
+// Code Generation Functions
+//------------------------------------------------------------------------------
+
+/// Generate Request and Response enums based on function metadata
+fn generate_request_response_enums(
+    function_metadata: &[FunctionMetadata],
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+    if function_metadata.is_empty() {
+        return (quote! {}, quote! {});
+    }
+
+    // Request enum variants
+    let request_variants = function_metadata.iter().map(|func| {
+        let variant_name = format_ident!("{}", &func.variant_name);
         
-    // Generate a nice clean representation of the enums for debug printing
+        if func.params.is_empty() {
+            // Unit variant for functions with no parameters
+            quote! { #variant_name }
+        } else if func.params.len() == 1 {
+            // Simple tuple variant for single parameter
+            let param_type = &func.params[0];
+            quote! { #variant_name(#param_type) }
+        } else {
+            // Tuple variant with multiple types for multiple parameters
+            let param_types = &func.params;
+            quote! { #variant_name(#(#param_types),*) }
+        }
+    });
+
+    // Response enum variants
+    let response_variants = function_metadata.iter().map(|func| {
+        let variant_name = format_ident!("{}", &func.variant_name);
+        
+        if let Some(return_type) = &func.return_type {
+            let type_str = return_type.to_token_stream().to_string();
+            if type_str == "()" {
+                // Unit variant for () return type
+                quote! { #variant_name }
+            } else {
+                // Tuple variant with return type
+                quote! { #variant_name(#return_type) }
+            }
+        } else {
+            // Unit variant for no explicit return
+            quote! { #variant_name }
+        }
+    });
+
+    // Generate the enum definitions with serialization derives
+    (
+        quote! {
+            #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            enum Request {
+                #(#request_variants),*
+            }
+        },
+        quote! {
+            #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            enum Response {
+                #(#response_variants),*
+            }
+        }
+    )
+}
+
+/// Generate debug string representations of the Request and Response enums
+fn generate_debug_enum_strings(
+    function_metadata: &[FunctionMetadata],
+) -> (String, String) {
     let debug_request_enum = function_metadata.iter().map(|func| {
         let variant_name = &func.variant_name;
         
@@ -477,104 +462,184 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }).collect::<Vec<_>>().join("\n");
 
-    // Generate local handler match arms for direct inclusion in the event loop
-    let local_request_match_arms = if !local_handlers.is_empty() {
-        let dispatch_arms = local_handlers
-            .iter()
-            .map(|func| {
-                let fn_name = &func.name;
-                let variant_name = format_ident!("{}", &func.variant_name);
-                
-                if func.params.is_empty() {
-                    // Function with no parameters
-                    quote! {
-                        Request::#variant_name => {
-                            let result = state.#fn_name();
-                            let response = Response::#variant_name(result);
-                            let resp = hyperware_process_lib::Response::new()
-                                .body(serde_json::to_vec(&response).unwrap());
-                            resp.send().unwrap();
-                        }
-                    }
-                } else if func.params.len() == 1 {
-                    // Function with a single parameter
-                    quote! {
-                        Request::#variant_name(param) => {
-                            let result = state.#fn_name(param);
-                            let response = Response::#variant_name(result);
-                            let resp = hyperware_process_lib::Response::new()
-                                .body(serde_json::to_vec(&response).unwrap());
-                            resp.send().unwrap();
-                        }
-                    }
-                } else {
-                    // Function with multiple parameters
-                    // Create parameter names (param0, param1, etc.)
-                    let param_count = func.params.len();
-                    let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
-                    let param_names_2 = param_names.clone(); // Clone for reuse
-                    
-                    quote! {
-                        Request::#variant_name(#(#param_names),*) => {
-                            let result = state.#fn_name(#(#param_names_2),*);
-                            let response = Response::#variant_name(result);
-                            let resp = hyperware_process_lib::Response::new()
-                                .body(serde_json::to_vec(&response).unwrap());
-                            kiprintln!("Sending response: {:?}", response);
-                            resp.send().unwrap();
-                        }
+    (debug_request_enum, debug_response_enum)
+}
+
+/// Generate local handler match arms for request handling
+fn generate_local_request_match_arms(
+    local_handlers: &[&FunctionMetadata],
+) -> proc_macro2::TokenStream {
+    if local_handlers.is_empty() {
+        return quote! {
+            hyperware_process_lib::logging::warn!("No local handlers defined but received a local request");
+        };
+    }
+
+    let dispatch_arms = local_handlers
+        .iter()
+        .map(|func| {
+            let fn_name = &func.name;
+            let variant_name = format_ident!("{}", &func.variant_name);
+            
+            if func.params.is_empty() {
+                // Function with no parameters
+                quote! {
+                    Request::#variant_name => {
+                        let result = state.#fn_name();
+                        let response = Response::#variant_name(result);
+                        let resp = hyperware_process_lib::Response::new()
+                            .body(serde_json::to_vec(&response).unwrap());
+                        resp.send().unwrap();
                     }
                 }
-            });
-        
-        // Add an explicit unreachable for other variants
-        let unreachable_arm = quote! {
-            _ => unreachable!("Non-local request variant received in local handler")
-        };
-        
-        quote! {
-            match request {
-                #(#dispatch_arms)*
-                #unreachable_arm
+            } else if func.params.len() == 1 {
+                // Function with a single parameter
+                quote! {
+                    Request::#variant_name(param) => {
+                        let result = state.#fn_name(param);
+                        let response = Response::#variant_name(result);
+                        let resp = hyperware_process_lib::Response::new()
+                            .body(serde_json::to_vec(&response).unwrap());
+                        resp.send().unwrap();
+                    }
+                }
+            } else {
+                // Function with multiple parameters
+                // Create parameter names (param0, param1, etc.)
+                let param_count = func.params.len();
+                let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
+                let param_names_2 = param_names.clone(); // Clone for reuse
+                
+                quote! {
+                    Request::#variant_name(#(#param_names),*) => {
+                        let result = state.#fn_name(#(#param_names_2),*);
+                        let response = Response::#variant_name(result);
+                        let resp = hyperware_process_lib::Response::new()
+                            .body(serde_json::to_vec(&response).unwrap());
+                        kiprintln!("Sending response: {:?}", response);
+                        resp.send().unwrap();
+                    }
+                }
             }
-        }
-    } else {
-        quote! {
-            hyperware_process_lib::logging::warn!("No local handlers defined but received a local request");
-        }
+        });
+    
+    // Add an explicit unreachable for other variants
+    let unreachable_arm = quote! {
+        _ => unreachable!("Non-local request variant received in local handler")
     };
     
-    // Generate a string representation of the local handler code for debugging
-    let debug_local_handler_dispatch = if !local_handlers.is_empty() {
-        let debug_cases = local_handlers
-            .iter()
-            .map(|func| {
-                let fn_name = &func.name;
-                let variant_name = &func.variant_name;
-                
-                if func.params.is_empty() {
-                    format!("    Request::{} => {{ /* Call state.{}() */ }}", variant_name, fn_name)
-                } else if func.params.len() == 1 {
-                    format!("    Request::{}(param) => {{ /* Call state.{}(param) */ }}", variant_name, fn_name)
-                } else {
-                    let param_count = func.params.len();
-                    let param_names: Vec<_> = (0..param_count).map(|i| format!("param{}", i)).collect();
-                    let params_list = param_names.join(", ");
-                    
-                    format!("    Request::{}({}) => {{ /* Call state.{}({}) */ }}", 
-                        variant_name, params_list, fn_name, params_list)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+    quote! {
+        match request {
+            #(#dispatch_arms)*
+            #unreachable_arm
+        }
+    }
+}
+
+/// Generate a debug string representation of the local handler dispatch code
+fn generate_debug_local_handler_string(
+    local_handlers: &[&FunctionMetadata],
+) -> String {
+    if local_handlers.is_empty() {
+        return "// No local handlers defined".to_string();
+    }
+
+    let debug_cases = local_handlers
+        .iter()
+        .map(|func| {
+            let fn_name = &func.name;
+            let variant_name = &func.variant_name;
             
-        format!(
-            "match request {{\n{}\n}}",
-            debug_cases
-        )
-    } else {
-        "// No local handlers defined".to_string()
+            if func.params.is_empty() {
+                format!("    Request::{} => {{ /* Call state.{}() */ }}", variant_name, fn_name)
+            } else if func.params.len() == 1 {
+                format!("    Request::{}(param) => {{ /* Call state.{}(param) */ }}", variant_name, fn_name)
+            } else {
+                let param_count = func.params.len();
+                let param_names: Vec<_> = (0..param_count).map(|i| format!("param{}", i)).collect();
+                let params_list = param_names.join(", ");
+                
+                format!("    Request::{}({}) => {{ /* Call state.{}({}) */ }}", 
+                    variant_name, params_list, fn_name, params_list)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+        
+    format!("match request {{\n{}\n}}", debug_cases)
+}
+
+/// Remove our custom attributes from the implementation block
+fn clean_impl_block(impl_block: &ItemImpl) -> ItemImpl {
+    let mut cleaned_impl_block = impl_block.clone();
+    for item in &mut cleaned_impl_block.items {
+        if let syn::ImplItem::Fn(method) = item {
+            method.attrs.retain(|attr| {
+                !attr.path().is_ident("init")
+                    && !attr.path().is_ident("http")
+                    && !attr.path().is_ident("local")
+                    && !attr.path().is_ident("remote")
+                    && !attr.path().is_ident("ws")
+            });
+        }
+    }
+    cleaned_impl_block
+}
+
+//------------------------------------------------------------------------------
+// Main Macro Implementation
+//------------------------------------------------------------------------------
+
+/// The main procedural macro
+#[proc_macro_attribute]
+pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse the input
+    let attr_args = parse_macro_input!(attr as MetaList);
+    let impl_block = parse_macro_input!(item as ItemImpl);
+
+    // Parse the macro arguments
+    let args = match parse_args(attr_args) {
+        Ok(args) => args,
+        Err(e) => return e.to_compile_error().into(),
     };
+
+    // Get the self type from the implementation block
+    let self_ty = &impl_block.self_ty;
+
+    // Analyze the methods in the implementation block
+    let (init_method, ws_method, function_metadata) =
+        match analyze_methods(&impl_block) {
+            Ok(methods) => methods,
+            Err(e) => return e.to_compile_error().into(),
+        };
+
+    // Split functions by handler type
+    let local_handlers: Vec<_> = function_metadata.iter()
+        .filter(|f| f.is_local)
+        .collect();
+    
+    let remote_handlers: Vec<_> = function_metadata.iter()
+        .filter(|f| f.is_remote)
+        .collect();
+    
+    let http_handlers: Vec<_> = function_metadata.iter()
+        .filter(|f| f.is_http)
+        .collect();
+
+    // Generate Request and Response enums
+    let (request_enum, response_enum) = generate_request_response_enums(&function_metadata);
+    
+    // Generate debug strings
+    let (debug_request_enum, debug_response_enum) = generate_debug_enum_strings(&function_metadata);
+    
+    // Generate local handler match arms
+    let local_request_match_arms = generate_local_request_match_arms(&local_handlers);
+    
+    // Generate debug local handler string
+    let debug_local_handler_dispatch = generate_debug_local_handler_string(&local_handlers);
+
+    // Clean the implementation block
+    let cleaned_impl_block = clean_impl_block(&impl_block);
 
     // Export the init method identifier for direct use in the component implementation
     let init_method_ident = if let Some(method_name) = &init_method {
@@ -590,25 +655,12 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    let mut cleaned_impl_block = impl_block.clone();
-    for item in &mut cleaned_impl_block.items {
-        if let syn::ImplItem::Fn(method) = item {
-            method.attrs.retain(|attr| {
-                !attr.path().is_ident("init")
-                    && !attr.path().is_ident("http")
-                    && !attr.path().is_ident("local")
-                    && !attr.path().is_ident("remote")
-                    && !attr.path().is_ident("ws")
-            });
-        }
-    }
-
+    // Extract values from args for use in the quote macro
     let name = &args.name;
     let endpoints = &args.endpoints;
     let save_config = &args.save_config;
     let wit_world = &args.wit_world;
     
-    // Extract these values for use in the quote macro
     let icon = match &args.icon {
         Some(icon_str) => quote! { Some(#icon_str.to_string()) },
         None => quote! { None }
@@ -624,6 +676,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! { None }
     };
 
+    // Generate the final output
     let output = quote! {
         wit_bindgen::generate!({
             path: "target/wit",
