@@ -47,7 +47,7 @@ impl AsyncRequesterState {
         "some string".to_string()
     }
 
-    #[local]
+    #[remote]
     fn increment_counter_2(&mut self, value: f64, another_value: Vec<String>, yet_another_value: bool) -> Vec<i32> {
         self.request_count += 1;
         kiprintln!("Called with: {} {:?} {}", value, another_value, yet_another_value);

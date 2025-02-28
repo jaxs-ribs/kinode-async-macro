@@ -465,18 +465,32 @@ fn generate_debug_enum_strings(
     (debug_request_enum, debug_response_enum)
 }
 
-/// Generate local handler match arms for request handling
-fn generate_local_request_match_arms(
-    local_handlers: &[&FunctionMetadata],
+/// Generate handler match arms for request handling (works for both local and remote)
+fn generate_request_match_arms(
+    handlers: &[&FunctionMetadata],
     self_ty: &Box<syn::Type>,
+    is_local: bool,
 ) -> proc_macro2::TokenStream {
-    if local_handlers.is_empty() {
+    if handlers.is_empty() {
+        let message = if is_local {
+            "No local handlers defined but received a local request"
+        } else {
+            "No remote handlers defined but received a remote request"
+        };
         return quote! {
-            hyperware_process_lib::logging::warn!("No local handlers defined but received a local request");
+            hyperware_process_lib::logging::warn!(#message);
         };
     }
 
-    let dispatch_arms = local_handlers
+    let message_param = if !is_local {
+        quote! { message, }
+    } else {
+        quote! {}
+    };
+
+    let log_prefix = if is_local { "local" } else { "remote" };
+
+    let dispatch_arms = handlers
         .iter()
         .map(|func| {
             let fn_name = &func.name;
@@ -487,12 +501,12 @@ fn generate_local_request_match_arms(
                 let response = Response::#variant_name(result);
                 let resp = hyperware_process_lib::Response::new()
                     .body(serde_json::to_vec(&response).unwrap());
-                kiprintln!("Sending response: {:?}", response);
+                kiprintln!("Sending {} response: {:?}", #log_prefix, response);
                 resp.send().unwrap();
             };
             
             if func.is_async {
-                // Async function handling using state pointer to avoid ownership issues
+                // Async function handling using state pointer
                 if func.params.is_empty() {
                     // Async function with no parameters
                     quote! {
@@ -552,7 +566,7 @@ fn generate_local_request_match_arms(
                     }
                 }
             } else {
-                // Sync function handling (unchanged from original)
+                // Sync function handling
                 if func.params.is_empty() {
                     quote! {
                         Request::#variant_name => {
@@ -583,8 +597,9 @@ fn generate_local_request_match_arms(
         });
     
     // Add an explicit unreachable for other variants
+    let type_name = if is_local { "local" } else { "remote" };
     let unreachable_arm = quote! {
-        _ => unreachable!("Non-local request variant received in local handler")
+        _ => unreachable!(concat!("Non-", #type_name, " request variant received in ", #type_name, " handler"))
     };
     
     quote! {
@@ -595,15 +610,32 @@ fn generate_local_request_match_arms(
     }
 }
 
-/// Generate a debug string representation of the local handler dispatch code
-fn generate_debug_local_handler_string(
+/// Generate local handler match arms for request handling
+fn generate_local_request_match_arms(
     local_handlers: &[&FunctionMetadata],
+    self_ty: &Box<syn::Type>,
+) -> proc_macro2::TokenStream {
+    generate_request_match_arms(local_handlers, self_ty, true)
+}
+
+/// Generate remote handler match arms for request handling
+fn generate_remote_request_match_arms(
+    remote_handlers: &[&FunctionMetadata],
+    self_ty: &Box<syn::Type>,
+) -> proc_macro2::TokenStream {
+    generate_request_match_arms(remote_handlers, self_ty, false)
+}
+
+/// Generate a debug string representation of a handler dispatch code
+fn generate_debug_handler_string(
+    handlers: &[&FunctionMetadata],
+    handler_type: &str,
 ) -> String {
-    if local_handlers.is_empty() {
-        return "// No local handlers defined".to_string();
+    if handlers.is_empty() {
+        return format!("// No {} handlers defined", handler_type).to_string();
     }
 
-    let debug_cases = local_handlers
+    let debug_cases = handlers
         .iter()
         .map(|func| {
             let fn_name = &func.name;
@@ -629,6 +661,20 @@ fn generate_debug_local_handler_string(
         .join("\n");
         
     format!("match request {{\n{}\n}}", debug_cases)
+}
+
+/// Generate a debug string representation of the local handler dispatch code
+fn generate_debug_local_handler_string(
+    local_handlers: &[&FunctionMetadata],
+) -> String {
+    generate_debug_handler_string(local_handlers, "local")
+}
+
+/// Generate a debug string representation of the remote handler dispatch code
+fn generate_debug_remote_handler_string(
+    remote_handlers: &[&FunctionMetadata],
+) -> String {
+    generate_debug_handler_string(remote_handlers, "remote")
 }
 
 /// Remove our custom attributes from the implementation block
@@ -697,8 +743,14 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate local handler match arms
     let local_request_match_arms = generate_local_request_match_arms(&local_handlers, self_ty);
     
+    // Generate remote handler match arms
+    let remote_request_match_arms = generate_remote_request_match_arms(&remote_handlers, self_ty);
+    
     // Generate debug local handler string
     let debug_local_handler_dispatch = generate_debug_local_handler_string(&local_handlers);
+
+    // Generate debug remote handler string
+    let debug_remote_handler_dispatch = generate_debug_remote_handler_string(&remote_handlers);
 
     // Clean the implementation block
     let cleaned_impl_block = clean_impl_block(&impl_block);
@@ -777,6 +829,13 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                 kiprintln!("{}", #debug_local_handler_dispatch);
                 kiprintln!("}}");
                 
+                // Debug: Print the remote handler dispatch code
+                kiprintln!("============= REMOTE HANDLER DISPATCH ============");
+                kiprintln!("// Pseudo-code representation of generated handler:");
+                kiprintln!("fn handle_remote_request(state: &mut State, message: &Message, request: Request) {{");
+                kiprintln!("{}", #debug_remote_handler_dispatch);
+                kiprintln!("}}");
+                
                 kiprintln!("Starting application...");
                 
                 // Initialize our state
@@ -840,8 +899,27 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     }
                                 }
                             } else {
-                                // For future: handle remote messages
-                                hyperware_process_lib::logging::info!("Received remote message (not yet handled)");
+                                // Handle remote messages
+                                match serde_json::from_slice::<serde_json::Value>(message.body()) {
+                                    Ok(req_value) => {
+                                        // Process the remote request based on our handlers
+                                        match serde_json::from_value::<Request>(req_value.clone()) {
+                                            Ok(request) => {
+                                                // Match on the request variant and call the appropriate handler
+                                                #remote_request_match_arms
+                                                
+                                                // Save state if needed
+                                                hyperware_app_common::maybe_save_state(&state);
+                                            },
+                                            Err(e) => {
+                                                hyperware_process_lib::logging::warn!("Failed to deserialize remote request into Request enum: {}", e);
+                                            }
+                                        }
+                                    },
+                                    Err(e) => {
+                                        hyperware_process_lib::logging::warn!("Failed to parse message body as JSON: {}", e);
+                                    }
+                                }
                             }
                         },
                         Err(e) => {
