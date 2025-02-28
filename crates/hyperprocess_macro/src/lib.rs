@@ -4,7 +4,6 @@ use quote::{format_ident, quote, ToTokens};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{parse_macro_input, spanned::Spanned, Expr, ItemImpl, Meta, ReturnType};
-use hyperware_app_common::APP_CONTEXT;
 
 // Create a newtype wrapper
 struct MetaList(Punctuated<Meta, Comma>);
@@ -478,8 +477,8 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }).collect::<Vec<_>>().join("\n");
 
-    // Generate local handler dispatch code
-    let local_handler_code = if !local_handlers.is_empty() {
+    // Generate local handler match arms for direct inclusion in the event loop
+    let local_request_match_arms = if !local_handlers.is_empty() {
         let dispatch_arms = local_handlers
             .iter()
             .map(|func| {
@@ -492,7 +491,9 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                         Request::#variant_name => {
                             let result = state.#fn_name();
                             let response = Response::#variant_name(result);
-                            // TODO: Send response back
+                            let resp = hyperware_process_lib::Response::new()
+                                .body(serde_json::to_vec(&response).unwrap());
+                            resp.send().unwrap();
                         }
                     }
                 } else if func.params.len() == 1 {
@@ -501,7 +502,9 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                         Request::#variant_name(param) => {
                             let result = state.#fn_name(param);
                             let response = Response::#variant_name(result);
-                            // TODO: Send response back
+                            let resp = hyperware_process_lib::Response::new()
+                                .body(serde_json::to_vec(&response).unwrap());
+                            resp.send().unwrap();
                         }
                     }
                 } else {
@@ -515,76 +518,77 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                         Request::#variant_name(#(#param_names),*) => {
                             let result = state.#fn_name(#(#param_names_2),*);
                             let response = Response::#variant_name(result);
-                            // TODO: Send response back
+                            let resp = hyperware_process_lib::Response::new()
+                                .body(serde_json::to_vec(&response).unwrap());
+                            kiprintln!("Sending response: {:?}", response);
+                            resp.send().unwrap();
                         }
                     }
                 }
             });
         
+        // Add an explicit unreachable for other variants
+        let unreachable_arm = quote! {
+            _ => unreachable!("Non-local request variant received in local handler")
+        };
+        
         quote! {
-            |message: &__hyperprocess_internal::Message, state: &mut #self_ty, req: serde_json::Value| {
-                match serde_json::from_value::<Request>(req) {
-                    Ok(request) => {
-                        match request {
-                            #(#dispatch_arms)*
-                        }
-                    },
-                    Err(e) => {
-                        hyperware_process_lib::logging::warn!("Failed to deserialize local request into Request enum: {}", e);
-                    }
-                }
+            match request {
+                #(#dispatch_arms)*
+                #unreachable_arm
             }
         }
     } else {
-        quote! { no_local_request }
+        quote! {
+            hyperware_process_lib::logging::warn!("No local handlers defined but received a local request");
+        }
     };
-
-    // Generate remote handler dispatch code (similar to local)
-    let remote_handler_code = if !remote_handlers.is_empty() {
-        // Similar implementation to local_handler_code
-        quote! { no_remote_request }  // Placeholder for now
+    
+    // Generate a string representation of the local handler code for debugging
+    let debug_local_handler_dispatch = if !local_handlers.is_empty() {
+        let debug_cases = local_handlers
+            .iter()
+            .map(|func| {
+                let fn_name = &func.name;
+                let variant_name = &func.variant_name;
+                
+                if func.params.is_empty() {
+                    format!("    Request::{} => {{ /* Call state.{}() */ }}", variant_name, fn_name)
+                } else if func.params.len() == 1 {
+                    format!("    Request::{}(param) => {{ /* Call state.{}(param) */ }}", variant_name, fn_name)
+                } else {
+                    let param_count = func.params.len();
+                    let param_names: Vec<_> = (0..param_count).map(|i| format!("param{}", i)).collect();
+                    let params_list = param_names.join(", ");
+                    
+                    format!("    Request::{}({}) => {{ /* Call state.{}({}) */ }}", 
+                        variant_name, params_list, fn_name, params_list)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+            
+        format!(
+            "match request {{\n{}\n}}",
+            debug_cases
+        )
     } else {
-        quote! { no_remote_request }
+        "// No local handlers defined".to_string()
     };
 
-    // Generate HTTP handler dispatch code (similar to local)
-    let http_handler_code = if !http_handlers.is_empty() {
-        // Similar implementation to local_handler_code
-        quote! { no_http_api_call }  // Placeholder for now
+    // Export the init method identifier for direct use in the component implementation
+    let init_method_ident = if let Some(method_name) = &init_method {
+        quote! { Some(stringify!(#method_name)) }
     } else {
-        quote! { no_http_api_call }
+        quote! { None::<&str> }
     };
 
-    // Generate init function code
-    let init_fn_code = if let Some(method_name) = init_method {
-        quote! { |state: &mut #self_ty| state.#method_name() }
+    // For direct method call, we need the actual method identifier
+    let init_method_call = if let Some(method_name) = &init_method {
+        quote! { state.#method_name(); }
     } else {
-        quote! { no_init_fn }
+        quote! {}
     };
-
-    // Generate ws handler code
-    let ws_handler_code = if let Some(_) = ws_method {
-        // We'll implement this later
-        quote! { no_ws_handler }
-    } else {
-        quote! { no_ws_handler }
-    };
-
-    let icon = args
-        .icon
-        .as_ref()
-        .map(|s| quote! { Some(#s) })
-        .unwrap_or(quote! { None });
-    let widget = args
-        .widget
-        .as_ref()
-        .map(|s| quote! { Some(#s) })
-        .unwrap_or(quote! { None });
-    let ui = args
-        .ui
-        .as_ref()
-        .map(|expr| quote! { Some(#expr) })
-        .unwrap_or(quote! { None });
 
     let mut cleaned_impl_block = impl_block.clone();
     for item in &mut cleaned_impl_block.items {
@@ -603,6 +607,22 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     let endpoints = &args.endpoints;
     let save_config = &args.save_config;
     let wit_world = &args.wit_world;
+    
+    // Extract these values for use in the quote macro
+    let icon = match &args.icon {
+        Some(icon_str) => quote! { Some(#icon_str.to_string()) },
+        None => quote! { None }
+    };
+    
+    let widget = match &args.widget {
+        Some(widget_str) => quote! { Some(#widget_str.to_string()) },
+        None => quote! { None }
+    };
+    
+    let ui = match &args.ui {
+        Some(ui_expr) => quote! { Some(#ui_expr) },
+        None => quote! { None }
+    };
 
     let output = quote! {
         wit_bindgen::generate!({
@@ -612,69 +632,15 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
             additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
         });
 
+        use hyperware_process_lib::http::server::HttpBindingConfig;
+        use hyperware_app_common::Binding;
+
         #cleaned_impl_block
 
         // Add our generated request/response enums
         #request_enum
         #response_enum
 
-        // Create a module to isolate our imports and avoid name collisions
-        mod __hyperprocess_internal {
-            // Re-export the necessary items for use in the Component impl
-            pub use hyperware_app_common::{
-                no_init_fn,
-                no_http_api_call,
-                no_local_request,
-                no_remote_request,
-                no_ws_handler,
-                Binding,
-                SaveOptions,
-                APP_CONTEXT,
-            };
-            pub use hyperware_process_lib::{
-                http::server::{HttpServer, WsMessageType},
-                LazyLoadBlob,
-                Message,
-            };
-            // Import futures_util directly from the crate
-            pub use futures_util::task::noop_waker_ref;
-
-            // Import all the necessary items for the generated code
-            use hyperware_app_common::prelude::*;
-            use hyperware_app_common::{
-                HiddenState,
-                State,
-                maybe_save_state,
-                handle_send_error,
-                setup_server,
-                initialize_state,
-            };
-            use hyperware_process_lib::get_state;
-            use hyperware_process_lib::http::server::send_response;
-            use hyperware_process_lib::http::server::HttpServerRequest;
-            use hyperware_process_lib::http::StatusCode;
-            use hyperware_process_lib::logging::info;
-            use hyperware_process_lib::logging::init_logging;
-            use hyperware_process_lib::logging::warn;
-            use hyperware_process_lib::logging::Level;
-            use hyperware_process_lib::Address;
-            use hyperware_process_lib::Request;
-            use hyperware_process_lib::SendErrorKind;
-            use hyperware_process_lib::{
-                await_message, homepage, http, kiprintln, set_state, SendError,
-            };
-            use serde::Deserialize;
-            use serde::Serialize;
-            use serde_json::Value;
-            use std::any::Any;
-            use std::cell::RefCell;
-            use std::collections::HashMap;
-            use std::future::Future;
-            use std::pin::Pin;
-            use std::task::{Context, Poll};
-            use uuid::Uuid;
-        }
-        
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
@@ -688,20 +654,83 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                 kiprintln!("enum Response {{");
                 kiprintln!("{}", #debug_response_enum);
                 kiprintln!("}}");
-                kiprintln!("Dummy implementation - not actually running the app");
-
+                
+                // Debug: Print the local handler dispatch code
+                kiprintln!("============= LOCAL HANDLER DISPATCH =============");
+                kiprintln!("// Pseudo-code representation of generated handler:");
+                kiprintln!("fn handle_local_request(state: &mut State, request: Request) {{");
+                kiprintln!("{}", #debug_local_handler_dispatch);
+                kiprintln!("}}");
+                
+                kiprintln!("Starting application...");
+                
+                // Initialize our state
+                let mut state = hyperware_app_common::initialize_state::<#self_ty>();
+                
+                // Set up necessary components
+                let app_name = #name;
+                let app_icon = #icon;
+                let app_widget = #widget;
+                let ui_config = #ui;
+                let endpoints = #endpoints;
+                
+                // Setup UI if needed
+                if app_icon.is_some() && app_widget.is_some() {
+                    hyperware_process_lib::homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
+                }
+                
+                // Initialize logging
+                hyperware_process_lib::logging::init_logging(
+                    hyperware_process_lib::logging::Level::DEBUG,
+                    hyperware_process_lib::logging::Level::INFO,
+                    None, Some((0, 0, 1, 1)), None
+                ).unwrap();
+                
+                // Setup server with endpoints
+                let mut server = hyperware_app_common::setup_server(ui_config.as_ref(), &endpoints);
+                
+                // Initialize app state
+                if #init_method_ident.is_some() {
+                    #init_method_call
+                }
+                
+                // Main event loop
                 loop {
-                    __hyperprocess_internal::APP_CONTEXT.with(|ctx| {
+                    hyperware_app_common::APP_CONTEXT.with(|ctx| {
                         ctx.borrow_mut().executor.poll_all_tasks();
                     });
+                    
                     match hyperware_process_lib::await_message() {
                         Ok(message) => {
                             if message.is_local() {
-
+                                // Parse the message body as JSON
+                                match serde_json::from_slice::<serde_json::Value>(message.body()) {
+                                    Ok(req_value) => {
+                                        // Process the local request based on our handlers
+                                        match serde_json::from_value::<Request>(req_value.clone()) {
+                                            Ok(request) => {
+                                                // Match on the request variant and call the appropriate handler
+                                                #local_request_match_arms
+                                                
+                                                // Save state if needed
+                                                hyperware_app_common::maybe_save_state(&state);
+                                            },
+                                            Err(e) => {
+                                                hyperware_process_lib::logging::warn!("Failed to deserialize local request into Request enum: {}", e);
+                                            }
+                                        }
+                                    },
+                                    Err(e) => {
+                                        hyperware_process_lib::logging::warn!("Failed to parse message body as JSON: {}", e);
+                                    }
+                                }
+                            } else {
+                                // For future: handle remote messages
+                                hyperware_process_lib::logging::info!("Received remote message (not yet handled)");
                             }
-                        }
+                        },
                         Err(e) => {
-                            // TODO: Don't do it yet, we'll add error handling later
+                            // We'll improve error handling later
                             kiprintln!("Failed to await message: {}", e);
                         }
                     }
