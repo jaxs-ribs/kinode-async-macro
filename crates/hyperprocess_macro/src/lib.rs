@@ -481,43 +481,86 @@ fn generate_local_request_match_arms(
             let fn_name = &func.name;
             let variant_name = format_ident!("{}", &func.variant_name);
             
-            if func.params.is_empty() {
-                // Function with no parameters
-                quote! {
-                    Request::#variant_name => {
-                        let result = state.#fn_name();
-                        let response = Response::#variant_name(result);
-                        let resp = hyperware_process_lib::Response::new()
-                            .body(serde_json::to_vec(&response).unwrap());
-                        resp.send().unwrap();
+            // Prepare response handling code that's common between sync and async handlers
+            let response_handling = quote! {
+                let response = Response::#variant_name(result);
+                let resp = hyperware_process_lib::Response::new()
+                    .body(serde_json::to_vec(&response).unwrap());
+                kiprintln!("Sending response: {:?}", response);
+                resp.send().unwrap();
+            };
+            
+            if func.is_async {
+                // Async function handling
+                if func.params.is_empty() {
+                    // Async function with no parameters
+                    quote! {
+                        Request::#variant_name => {
+                            hyperware_app_common::hyper! {
+                                let result = state.#fn_name().await;
+                                #response_handling
+                            }
+                        }
                     }
-                }
-            } else if func.params.len() == 1 {
-                // Function with a single parameter
-                quote! {
-                    Request::#variant_name(param) => {
-                        let result = state.#fn_name(param);
-                        let response = Response::#variant_name(result);
-                        let resp = hyperware_process_lib::Response::new()
-                            .body(serde_json::to_vec(&response).unwrap());
-                        resp.send().unwrap();
+                } else if func.params.len() == 1 {
+                    // Async function with a single parameter
+                    quote! {
+                        Request::#variant_name(param) => {
+                            let param_captured = param;  // Capture param before moving into async block
+                            hyperware_app_common::hyper! {
+                                let result = state.#fn_name(param_captured).await;
+                                #response_handling
+                            }
+                        }
+                    }
+                } else {
+                    // Async function with multiple parameters
+                    let param_count = func.params.len();
+                    let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
+                    let capture_statements = (0..param_count).map(|i| {
+                        let param = format_ident!("param{}", i);
+                        let captured = format_ident!("param{}_captured", i);
+                        quote! { let #captured = #param; }
+                    });
+                    let captured_names = (0..param_count).map(|i| format_ident!("param{}_captured", i));
+                    
+                    quote! {
+                        Request::#variant_name(#(#param_names),*) => {
+                            // Capture all parameters before moving into async block
+                            #(#capture_statements)*
+                            hyperware_app_common::hyper! {
+                                let result = state.#fn_name(#(#captured_names),*).await;
+                                #response_handling
+                            }
+                        }
                     }
                 }
             } else {
-                // Function with multiple parameters
-                // Create parameter names (param0, param1, etc.)
-                let param_count = func.params.len();
-                let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
-                let param_names_2 = param_names.clone(); // Clone for reuse
-                
-                quote! {
-                    Request::#variant_name(#(#param_names),*) => {
-                        let result = state.#fn_name(#(#param_names_2),*);
-                        let response = Response::#variant_name(result);
-                        let resp = hyperware_process_lib::Response::new()
-                            .body(serde_json::to_vec(&response).unwrap());
-                        kiprintln!("Sending response: {:?}", response);
-                        resp.send().unwrap();
+                // Sync function handling (unchanged from original)
+                if func.params.is_empty() {
+                    quote! {
+                        Request::#variant_name => {
+                            let result = state.#fn_name();
+                            #response_handling
+                        }
+                    }
+                } else if func.params.len() == 1 {
+                    quote! {
+                        Request::#variant_name(param) => {
+                            let result = state.#fn_name(param);
+                            #response_handling
+                        }
+                    }
+                } else {
+                    let param_count = func.params.len();
+                    let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
+                    let param_names2 = param_names.clone();
+                    
+                    quote! {
+                        Request::#variant_name(#(#param_names),*) => {
+                            let result = state.#fn_name(#(#param_names2),*);
+                            #response_handling
+                        }
                     }
                 }
             }
@@ -549,18 +592,21 @@ fn generate_debug_local_handler_string(
         .map(|func| {
             let fn_name = &func.name;
             let variant_name = &func.variant_name;
+            let async_keyword = if func.is_async { "async " } else { "" };
             
             if func.params.is_empty() {
-                format!("    Request::{} => {{ /* Call state.{}() */ }}", variant_name, fn_name)
+                format!("    Request::{} => {{ /* Call state.{}{}() */ }}", 
+                    variant_name, async_keyword, fn_name)
             } else if func.params.len() == 1 {
-                format!("    Request::{}(param) => {{ /* Call state.{}(param) */ }}", variant_name, fn_name)
+                format!("    Request::{}(param) => {{ /* Call state.{}{}(param) */ }}", 
+                    variant_name, async_keyword, fn_name)
             } else {
                 let param_count = func.params.len();
                 let param_names: Vec<_> = (0..param_count).map(|i| format!("param{}", i)).collect();
                 let params_list = param_names.join(", ");
                 
-                format!("    Request::{}({}) => {{ /* Call state.{}({}) */ }}", 
-                    variant_name, params_list, fn_name, params_list)
+                format!("    Request::{}({}) => {{ /* Call state.{}{}({}) */ }}", 
+                    variant_name, params_list, async_keyword, fn_name, params_list)
             }
         })
         .collect::<Vec<_>>()
