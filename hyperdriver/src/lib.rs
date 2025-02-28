@@ -1,7 +1,6 @@
 use hyperprocess_macro::hyperprocess;
-use hyperware_process_lib::http::server::HttpBindingConfig;
 use hyperware_process_lib::kiprintln;
-use hyperware_app_common::{State, Binding};
+use hyperware_app_common::State;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,10 +33,26 @@ impl AsyncRequesterState {
         self.request_count = 0;
     }
 
-    // New local handler style
     #[local]
-    fn increment_counter(&mut self, value: i32) -> String {
+    #[remote]
+    fn increment_counter(&mut self, value: i32, another_value: String, yet_another_value: f32) -> String {
         self.request_count += 1;
-        format!("Incremented counter to {} with value {}", self.request_count, value)
+        "some string".to_string()
+    }
+
+    #[remote]
+    fn some_other_function(&mut self, string_val: String, another_string_val: String) -> f32 {
+        self.request_count += 1;
+        0.0
+    }
+
+    #[http]
+    fn increment_counter_3(&mut self, string_val: String) -> f32 {
+        self.request_count += 1;
+        0.0
     }
 }
+
+/*
+We want to be able to handle an arbitrary number of parameters for a request.
+*/

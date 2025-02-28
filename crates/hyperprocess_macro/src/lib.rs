@@ -230,14 +230,8 @@ fn validate_request_response_function(method: &syn::ImplItemFn) -> syn::Result<(
         ));
     }
 
-    // For now, allow 0-1 additional parameters (could expand later)
-    if method.sig.inputs.len() > 2 {
-        return Err(syn::Error::new_spanned(
-            &method.sig,
-            "Request-response handlers currently support at most one parameter (in addition to &mut self)",
-        ));
-    }
-
+    // No limit on additional parameters anymore - we support any number
+    
     // No validation for return type - any return type is allowed
     
     Ok(())
@@ -387,10 +381,14 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
             if func.params.is_empty() {
                 // Unit variant for functions with no parameters
                 quote! { #variant_name }
-            } else {
-                // Tuple variant for function with parameter
+            } else if func.params.len() == 1 {
+                // Simple tuple variant for single parameter
                 let param_type = &func.params[0];
                 quote! { #variant_name(#param_type) }
+            } else {
+                // Tuple variant with multiple types for multiple parameters
+                let param_types = &func.params;
+                quote! { #variant_name(#(#param_types),*) }
             }
         });
 
@@ -445,6 +443,38 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     let http_handlers: Vec<_> = function_metadata.iter()
         .filter(|f| f.is_http)
         .collect();
+        
+    // Generate a nice clean representation of the enums for debug printing
+    let debug_request_enum = function_metadata.iter().map(|func| {
+        let variant_name = &func.variant_name;
+        
+        if func.params.is_empty() {
+            format!("  {}", variant_name)
+        } else if func.params.len() == 1 {
+            let param_type = func.params[0].to_token_stream().to_string();
+            format!("  {}({})", variant_name, param_type)
+        } else {
+            let param_types: Vec<_> = func.params.iter()
+                .map(|ty| ty.to_token_stream().to_string())
+                .collect();
+            format!("  {}({})", variant_name, param_types.join(", "))
+        }
+    }).collect::<Vec<_>>().join("\n");
+    
+    let debug_response_enum = function_metadata.iter().map(|func| {
+        let variant_name = &func.variant_name;
+        
+        if let Some(return_type) = &func.return_type {
+            let type_str = return_type.to_token_stream().to_string();
+            if type_str == "()" {
+                format!("  {}", variant_name)
+            } else {
+                format!("  {}({})", variant_name, type_str)
+            }
+        } else {
+            format!("  {}", variant_name)
+        }
+    }).collect::<Vec<_>>().join("\n");
 
     // Generate local handler dispatch code
     let local_handler_code = if !local_handlers.is_empty() {
@@ -463,11 +493,25 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                             // TODO: Send response back
                         }
                     }
-                } else {
-                    // Function with a parameter
+                } else if func.params.len() == 1 {
+                    // Function with a single parameter
                     quote! {
                         Request::#variant_name(param) => {
                             let result = state.#fn_name(param);
+                            let response = Response::#variant_name(result);
+                            // TODO: Send response back
+                        }
+                    }
+                } else {
+                    // Function with multiple parameters
+                    // Create parameter names (param0, param1, etc.)
+                    let param_count = func.params.len();
+                    let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
+                    let param_names_2 = param_names.clone(); // Clone for reuse
+                    
+                    quote! {
+                        Request::#variant_name(#(#param_names),*) => {
+                            let result = state.#fn_name(#(#param_names_2),*);
                             let response = Response::#variant_name(result);
                             // TODO: Send response back
                         }
@@ -635,6 +679,17 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
+                // Debug: Print the generated enum definitions in a clean format
+                kiprintln!("============= GENERATED REQUEST ENUM =============");
+                kiprintln!("enum Request {{");
+                kiprintln!("{}", #debug_request_enum);
+                kiprintln!("}}");
+                
+                kiprintln!("============= GENERATED RESPONSE ENUM ============");
+                kiprintln!("enum Response {{");
+                kiprintln!("{}", #debug_response_enum);
+                kiprintln!("}}");
+                
                 // This dummy implementation is just to make the compiler happy
                 // while we work on the macro
                 kiprintln!("Dummy implementation - not actually running the app");
