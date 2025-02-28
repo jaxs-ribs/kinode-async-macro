@@ -1,3 +1,4 @@
+#![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use hyperware_process_lib::get_state;
 use hyperware_process_lib::http::server::send_response;
 use hyperware_process_lib::http::server::HttpServerRequest;
@@ -45,8 +46,8 @@ thread_local! {
 }
 
 thread_local! {
-    static CURRENT_PATH: RefCell<Option<String>> = RefCell::new(None);
-    static CURRENT_SERVER: RefCell<Option<*mut HttpServer>> = RefCell::new(None);
+    pub static CURRENT_PATH: RefCell<Option<String>> = RefCell::new(None);
+    pub static CURRENT_SERVER: RefCell<Option<*mut HttpServer>> = RefCell::new(None);
 }
 
 // Access function for the current path
@@ -247,7 +248,7 @@ pub trait State {
 }
 
 /// Initialize state from persisted storage or create new if none exists
-fn initialize_state<S>() -> S
+pub fn initialize_state<S>() -> S
 where
     S: State + for<'de> serde::Deserialize<'de>,
 {
@@ -265,7 +266,7 @@ where
     }
 }
 
-fn setup_server(
+pub fn setup_server(
     ui_config: Option<&hyperware_process_lib::http::server::HttpBindingConfig>,
     endpoints: &[Binding],
 ) -> http::server::HttpServer {
@@ -307,215 +308,11 @@ fn setup_server(
     server
 }
 
-fn handle_message<S, T1, T2, T3>(
-    message: Message,
-    user_state: &mut S,
-    server: &mut http::server::HttpServer,
-    handle_api_call: &impl Fn(&mut S, T1),
-    handle_local_request: &impl Fn(&Message, &mut S, T2),
-    handle_remote_request: &impl Fn(&Message, &mut S, T3),
-    handle_ws: &impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
-) where
-    S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
-    T1: serde::Serialize + serde::de::DeserializeOwned,
-    T2: serde::Serialize + serde::de::DeserializeOwned,
-    T3: serde::Serialize + serde::de::DeserializeOwned,
-{
-    match message {
-        Message::Response { body, context, .. } => {
-            let correlation_id = context
-                .as_deref()
-                .map(|bytes| String::from_utf8_lossy(bytes).to_string())
-                .unwrap_or_else(|| "no context".to_string());
 
-            RESPONSE_REGISTRY.with(|registry| {
-                registry.borrow_mut().insert(correlation_id, body);
-            });
-        }
-        Message::Request { .. } => {
-            if message.is_local() {
-                if message.source().process == "http-server:distro:sys" {
-                    http_request(&message, user_state, server, handle_api_call, handle_ws);
-                } else {
-                    local_request(&message, user_state, server, handle_local_request);
-                }
-            } else {
-                remote_request(&message, user_state, server, handle_remote_request);
-            }
-            // Try to save state based on configuration
-            maybe_save_state(user_state);
-        }
-    }
-}
 
-pub fn app<S, T1, T2, T3>(
-    app_name: &str,
-    app_icon: Option<&str>,
-    app_widget: Option<&str>,
-    ui_config: Option<hyperware_process_lib::http::server::HttpBindingConfig>,
-    endpoints: Vec<Binding>,
-    save_config: SaveOptions,
-    handle_api_call: impl Fn(&mut S, T1),
-    handle_local_request: impl Fn(&Message, &mut S, T2),
-    handle_remote_request: impl Fn(&Message, &mut S, T3),
-    handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
-    init_fn: fn(&mut S),
-) -> impl Fn()
-where
-    S: State + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
-    T1: serde::Serialize + serde::de::DeserializeOwned,
-    T2: serde::Serialize + serde::de::DeserializeOwned,
-    T3: serde::Serialize + serde::de::DeserializeOwned,
-{
-    HIDDEN_STATE.with(|cell| {
-        let mut hs = cell.borrow_mut();
-        *hs = Some(HiddenState::new(save_config.clone()));
-    });
-
-    if app_icon.is_some() && app_widget.is_some() {
-        homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
-    }
-
-    // Set up timer if needed
-    if let SaveOptions::EveryNSeconds(_seconds) = save_config {
-        // TODO: Needs to be asyncified
-        // setup_periodic_save_timer::<S>(seconds);
-    }
-
-    move || {
-        init_logging(Level::DEBUG, Level::INFO, None, Some((0, 0, 1, 1)), None).unwrap();
-        info!("starting app");
-
-        let mut server = setup_server(ui_config.as_ref(), &endpoints);
-        let mut user_state = initialize_state::<S>();
-
-        {
-            init_fn(&mut user_state);
-        }
-
-        loop {
-            EXECUTOR.with(|ex| ex.borrow_mut().poll_all_tasks());
-            match await_message() {
-                Err(send_error) => {
-                    // TODO: We should either remove this or extend the async stuff here
-                    handle_send_error::<S>(&send_error, &mut user_state);
-                }
-                Ok(message) => {
-                    handle_message(
-                        message,
-                        &mut user_state,
-                        &mut server,
-                        &handle_api_call,
-                        &handle_local_request,
-                        &handle_remote_request,
-                        &handle_ws,
-                    );
-                }
-            }
-        }
-    }
-}
-
-fn http_request<S, T1>(
-    message: &Message,
-    state: &mut S,
-    server: &mut http::server::HttpServer,
-    handle_api_call: impl Fn(&mut S, T1),
-    handle_ws: impl Fn(&mut S, &mut http::server::HttpServer, u32, WsMessageType, LazyLoadBlob),
-) where
-    T1: serde::Serialize + serde::de::DeserializeOwned,
-{
-    let http_request = serde_json::from_slice::<http::server::HttpServerRequest>(message.body())
-        .expect("failed to parse HTTP request");
-
-    match http_request {
-        HttpServerRequest::Http(http_request) => {
-            let Ok(path) = http_request.path() else {
-                warn!("Failed to get path for Http, exiting, this should never happen");
-                send_response(StatusCode::BAD_REQUEST, None, vec![]);
-                return;
-            };
-            let Some(blob) = message.blob() else {
-                warn!("Failed to get blob for Http, exiting");
-                send_response(StatusCode::BAD_REQUEST, None, vec![]);
-                return;
-            };
-            let Ok(deserialized_struct) = serde_json::from_slice::<T1>(blob.bytes()) else {
-                let body_str = String::from_utf8_lossy(blob.bytes());
-                warn!("Raw request body was: {:#?}", body_str);
-                warn!("Failed to deserialize into type parameter T1 (type: {}), check that the request body matches this type's structure", std::any::type_name::<T1>());
-                send_response(StatusCode::BAD_REQUEST, None, vec![]);
-                return;
-            };
-
-            CURRENT_PATH.with(|cp| *cp.borrow_mut() = Some(path.clone()));
-            handle_api_call(state, deserialized_struct);
-            CURRENT_PATH.with(|cp| *cp.borrow_mut() = None);
-        }
-        HttpServerRequest::WebSocketPush {
-            channel_id,
-            message_type,
-        } => {
-            let Some(blob) = message.blob() else {
-                warn!("Failed to get blob for WebSocketPush, exiting");
-                return;
-            };
-            handle_ws(state, server, channel_id, message_type, blob)
-        }
-        HttpServerRequest::WebSocketOpen { path, channel_id } => {
-            server.handle_websocket_open(&path, channel_id);
-        }
-        HttpServerRequest::WebSocketClose(channel_id) => {
-            server.handle_websocket_close(channel_id);
-        }
-    }
-}
-
-fn local_request<S, T>(
-    message: &Message,
-    state: &mut S,
-    server: &mut http::server::HttpServer,
-    handle_local_request: &impl Fn(&Message, &mut S, T),
-) where
-    S: std::fmt::Debug,
-    T: serde::Serialize + serde::de::DeserializeOwned,
-{
-    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
-        if message.body() == b"debug" {
-            kiprintln!("state:\n{:#?}", state);
-        } else {
-            warn!("Failed to deserialize local request into struct, exiting");
-            let body_str = String::from_utf8_lossy(message.body());
-            warn!("Raw request body was: {:#?}", body_str);
-        }
-        return;
-    };
-    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = Some(server as *mut HttpServer));
-    handle_local_request(message, state, request);
-    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = None);
-}
-
-fn remote_request<S, T>(
-    message: &Message,
-    state: &mut S,
-    server: &mut http::server::HttpServer,
-    handle_remote_request: &impl Fn(&Message, &mut S, T),
-) where
-    T: serde::Serialize + serde::de::DeserializeOwned,
-{
-    let Ok(request) = serde_json::from_slice::<T>(message.body()) else {
-        warn!("Failed to deserialize remote request into struct, exiting");
-        let body_str = String::from_utf8_lossy(message.body());
-        warn!("Raw request body was: {:#?}", body_str);
-        return;
-    };
-    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = Some(server as *mut HttpServer));
-    handle_remote_request(message, state, request);
-    CURRENT_SERVER.with(|cs| *cs.borrow_mut() = None);
-}
 
 /// Pretty prints a SendError in a more readable format
-fn pretty_print_send_error(error: &SendError) {
+pub fn pretty_print_send_error(error: &SendError) {
     let kind = &error.kind;
     let target = &error.target;
 
@@ -546,7 +343,7 @@ fn pretty_print_send_error(error: &SendError) {
     );
 }
 
-fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, _user_state: &mut S) {
+pub fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, _user_state: &mut S) {
     // Print the error
     pretty_print_send_error(send_error);
 
@@ -617,7 +414,7 @@ pub enum Binding {
     },
 }
 
-fn maybe_save_state<S>(state: &S)
+pub fn maybe_save_state<S>(state: &S)
 where
     S: serde::Serialize,
 {
