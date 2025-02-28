@@ -1,3 +1,4 @@
+#![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use hyperprocess_macro::hyperprocess;
 use hyperware_process_lib::kiprintln;
 use hyperware_app_common::State;

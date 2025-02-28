@@ -1,3 +1,4 @@
+#![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::punctuated::Punctuated;
@@ -641,10 +642,6 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
             use hyperware_app_common::{
                 HiddenState,
                 State,
-                EXECUTOR,
-                RESPONSE_REGISTRY,
-                CURRENT_PATH,
-                CURRENT_SERVER,
                 maybe_save_state,
                 handle_send_error,
                 setup_server,

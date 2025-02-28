@@ -29,35 +29,36 @@ use hyperware_process_lib::{
 };
 
 pub mod prelude {
-    pub use crate::HIDDEN_STATE;
+    pub use crate::APP_CONTEXT;
     // Add other commonly used items here
 }
 
 thread_local! {
-    pub static HIDDEN_STATE: RefCell<Option<HiddenState>> = RefCell::new(None);
+    pub static APP_CONTEXT: RefCell<AppContext> = RefCell::new(AppContext {
+        hidden_state: None,
+        executor: Executor::new(),
+        response_registry: HashMap::new(),
+        current_path: None,
+        current_server: None,
+    });
 }
 
-thread_local! {
-    pub static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new());
-}
-
-thread_local! {
-    pub static RESPONSE_REGISTRY: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
-}
-
-thread_local! {
-    pub static CURRENT_PATH: RefCell<Option<String>> = RefCell::new(None);
-    pub static CURRENT_SERVER: RefCell<Option<*mut HttpServer>> = RefCell::new(None);
+pub struct AppContext {
+    hidden_state: Option<HiddenState>,
+    executor: Executor,
+    response_registry: HashMap<String, Vec<u8>>,
+    current_path: Option<String>,
+    current_server: Option<*mut HttpServer>,
 }
 
 // Access function for the current path
 pub fn get_path() -> Option<String> {
-    CURRENT_PATH.with(|cp| cp.borrow().as_ref().cloned())
+    APP_CONTEXT.with(|ctx| ctx.borrow().current_path.clone())
 }
 
 // Access function for the current server
 pub fn get_server() -> Option<&'static mut HttpServer> {
-    CURRENT_SERVER.with(|cs| cs.borrow().map(|ptr| unsafe { &mut *ptr }))
+    APP_CONTEXT.with(|ctx| ctx.borrow().current_server.map(|ptr| unsafe { &mut *ptr }))
 }
 
 pub struct Executor {
@@ -104,9 +105,9 @@ impl Future for ResponseFuture {
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         let correlation_id = &self.correlation_id;
 
-        let maybe_bytes = RESPONSE_REGISTRY.with(|registry| {
-            let mut map = registry.borrow_mut();
-            map.remove(correlation_id)
+        let maybe_bytes = APP_CONTEXT.with(|ctx| {
+            let mut ctx_mut = ctx.borrow_mut();
+            ctx_mut.response_registry.remove(correlation_id)
         });
 
         if let Some(bytes) = maybe_bytes {
@@ -188,8 +189,8 @@ where
 #[macro_export]
 macro_rules! hyper {
     ($($code:tt)*) => {
-        $crate::EXECUTOR.with(|ex| {
-            ex.borrow_mut().spawn(async move {
+        $crate::APP_CONTEXT.with(|ctx| {
+            ctx.borrow_mut().executor.spawn(async move {
                 $($code)*
             })
         })
@@ -308,9 +309,6 @@ pub fn setup_server(
     server
 }
 
-
-
-
 /// Pretty prints a SendError in a more readable format
 pub fn pretty_print_send_error(error: &SendError) {
     let kind = &error.kind;
@@ -359,8 +357,8 @@ pub fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, _use
             // Serialize None as the response
             let none_response = serde_json::to_vec(kind).unwrap();
 
-            RESPONSE_REGISTRY.with(|registry| {
-                registry.borrow_mut().insert(correlation_id, none_response);
+            APP_CONTEXT.with(|ctx| {
+                ctx.borrow_mut().response_registry.insert(correlation_id, none_response);
             });
         }
     }
@@ -418,9 +416,9 @@ pub fn maybe_save_state<S>(state: &S)
 where
     S: serde::Serialize,
 {
-    HIDDEN_STATE.with(|cell| {
-        let mut hs = cell.borrow_mut();
-        if let Some(ref mut hidden_state) = *hs {
+    APP_CONTEXT.with(|ctx| {
+        let mut ctx_mut = ctx.borrow_mut();
+        if let Some(ref mut hidden_state) = ctx_mut.hidden_state {
             if hidden_state.should_save_state() {
                 if let Ok(s_bytes) = rmp_serde::to_vec(state) {
                     kiprintln!("State persisted");
