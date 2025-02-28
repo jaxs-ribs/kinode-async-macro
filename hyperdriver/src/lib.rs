@@ -42,61 +42,28 @@ impl AsyncRequesterState {
         yet_another_value: f32,
     ) -> String {
         self.request_count += 1;
-        kiprintln!("--------------------------------");
-        kiprintln!(
-            "We have been called with thes following values: {:?}, {:?}, {:?}",
-            value,
-            another_value,
-            yet_another_value
-        );
-        kiprintln!("Our counter is now {}", self.request_count);
-        kiprintln!("--------------------------------");
+        kiprintln!("Called with: {} {} {}", value, another_value, yet_another_value);
+        kiprintln!("Counter: {}", self.request_count);
         "some string".to_string()
     }
 
     #[local]
-    fn increment_counter_2(
-        &mut self,
-        value: f64,
-        another_value: Vec<String>,
-        yet_another_value: bool,
-    ) -> Vec<i32> {
+    fn increment_counter_2(&mut self, value: f64, another_value: Vec<String>, yet_another_value: bool) -> Vec<i32> {
         self.request_count += 1;
-        kiprintln!("--------------------------------");
-        kiprintln!(
-            "We have been called with thes following values: {:?}, {:?}, {:?}",
-            value,
-            another_value,
-            yet_another_value
-        );
-        kiprintln!("Our counter is now {}", self.request_count);
-        kiprintln!("--------------------------------");
-        "some string".to_string();
+        kiprintln!("Called with: {} {:?} {}", value, another_value, yet_another_value);
+        kiprintln!("Counter: {}", self.request_count);
         vec![42, 43, 44]
     }
 
     #[local]
     async fn increment_counter_async(&mut self, value: i32, name: String) -> String {
         self.request_count += 1;
-        kiprintln!("--------------------------------");
         kiprintln!("Starting async operations for {}", name);
-
-        // Simulate making two API requests in sequence
         let user_data = fetch_data("users", value).await;
-        kiprintln!("First fetch completed: {}", user_data);
-
         let stats_data = fetch_data("stats", value).await;
-        kiprintln!("Second fetch completed: {}", stats_data);
-
-        // Combine the results
-        let combined_result = format!("{} | {}", user_data, stats_data);
-
-        kiprintln!("All async operations completed");
-        kiprintln!("Results: {}", combined_result);
-        kiprintln!("Counter is now {}", self.request_count);
-        kiprintln!("--------------------------------");
-
-        format!("Results for {}: {}", name, combined_result)
+        let result = format!("{} | {}", user_data, stats_data);
+        kiprintln!("Completed. Result: {}", result);
+        format!("Results for {}: {}", name, result)
     }
 
     #[remote]
