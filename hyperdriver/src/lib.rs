@@ -133,5 +133,4 @@ We want to be able to handle an arbitrary number of parameters for a request.
 m our@hyperdriver:async-app:uncentered.os '{"IncrementCounter": [42, "abc", 3.14]}'
 m our@hyperdriver:async-app:uncentered.os '{"IncrementCounter2": [42.0, ["abc", "def"], true]}'
 m our@hyperdriver:async-app:uncentered.os '{"IncrementCounterAsync": [42, "test-user"]}'
-
 */

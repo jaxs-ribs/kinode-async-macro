@@ -468,6 +468,7 @@ fn generate_debug_enum_strings(
 /// Generate local handler match arms for request handling
 fn generate_local_request_match_arms(
     local_handlers: &[&FunctionMetadata],
+    self_ty: &Box<syn::Type>,
 ) -> proc_macro2::TokenStream {
     if local_handlers.is_empty() {
         return quote! {
@@ -491,13 +492,18 @@ fn generate_local_request_match_arms(
             };
             
             if func.is_async {
-                // Async function handling
+                // Async function handling using state pointer to avoid ownership issues
                 if func.params.is_empty() {
                     // Async function with no parameters
                     quote! {
                         Request::#variant_name => {
+                            // Create a mutable reference that will be promoted to a static lifetime
+                            // This is safe in WASM since we have a single-threaded environment
+                            // and the state outlives all async operations
+                            let state_ptr: *mut #self_ty = &mut state;
                             hyperware_app_common::hyper! {
-                                let result = state.#fn_name().await;
+                                // Inside the async block, we'll use the pointer to safely access state
+                                let result = unsafe { (*state_ptr).#fn_name().await };
                                 #response_handling
                             }
                         }
@@ -507,8 +513,13 @@ fn generate_local_request_match_arms(
                     quote! {
                         Request::#variant_name(param) => {
                             let param_captured = param;  // Capture param before moving into async block
+                            // Create a mutable reference that will be promoted to a static lifetime
+                            // This is safe in WASM since we have a single-threaded environment
+                            // and the state outlives all async operations
+                            let state_ptr: *mut #self_ty = &mut state;
                             hyperware_app_common::hyper! {
-                                let result = state.#fn_name(param_captured).await;
+                                // Inside the async block, we'll use the pointer to safely access state
+                                let result = unsafe { (*state_ptr).#fn_name(param_captured).await };
                                 #response_handling
                             }
                         }
@@ -528,8 +539,13 @@ fn generate_local_request_match_arms(
                         Request::#variant_name(#(#param_names),*) => {
                             // Capture all parameters before moving into async block
                             #(#capture_statements)*
+                            // Create a mutable reference that will be promoted to a static lifetime
+                            // This is safe in WASM since we have a single-threaded environment
+                            // and the state outlives all async operations
+                            let state_ptr: *mut #self_ty = &mut state;
                             hyperware_app_common::hyper! {
-                                let result = state.#fn_name(#(#captured_names),*).await;
+                                // Inside the async block, we'll use the pointer to safely access state
+                                let result = unsafe { (*state_ptr).#fn_name(#(#captured_names),*).await };
                                 #response_handling
                             }
                         }
@@ -679,7 +695,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (debug_request_enum, debug_response_enum) = generate_debug_enum_strings(&function_metadata);
     
     // Generate local handler match arms
-    let local_request_match_arms = generate_local_request_match_arms(&local_handlers);
+    let local_request_match_arms = generate_local_request_match_arms(&local_handlers, self_ty);
     
     // Generate debug local handler string
     let debug_local_handler_dispatch = generate_debug_local_handler_string(&local_handlers);
