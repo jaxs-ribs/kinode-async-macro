@@ -4,6 +4,7 @@ use quote::{format_ident, quote, ToTokens};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{parse_macro_input, spanned::Spanned, Expr, ItemImpl, Meta, ReturnType};
+use hyperware_app_common::APP_CONTEXT;
 
 // Create a newtype wrapper
 struct MetaList(Punctuated<Meta, Comma>);
@@ -521,7 +522,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
             });
         
         quote! {
-            |message: &Message, state: &mut #self_ty, req: serde_json::Value| {
+            |message: &__hyperprocess_internal::Message, state: &mut #self_ty, req: serde_json::Value| {
                 match serde_json::from_value::<Request>(req) {
                     Ok(request) => {
                         match request {
@@ -529,7 +530,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                     },
                     Err(e) => {
-                        warn!("Failed to deserialize local request into Request enum: {}", e);
+                        hyperware_process_lib::logging::warn!("Failed to deserialize local request into Request enum: {}", e);
                     }
                 }
             }
@@ -628,6 +629,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                 no_ws_handler,
                 Binding,
                 SaveOptions,
+                APP_CONTEXT,
             };
             pub use hyperware_process_lib::{
                 http::server::{HttpServer, WsMessageType},
@@ -686,16 +688,23 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                 kiprintln!("enum Response {{");
                 kiprintln!("{}", #debug_response_enum);
                 kiprintln!("}}");
-                
-                // This dummy implementation is just to make the compiler happy
-                // while we work on the macro
                 kiprintln!("Dummy implementation - not actually running the app");
-                
-                // This ensures the compiler knows about our generated enums
-                // so that type checking can work
-                if false {
-                    let _: Request = unsafe { std::mem::zeroed() };
-                    let _: Response = unsafe { std::mem::zeroed() };
+
+                loop {
+                    __hyperprocess_internal::APP_CONTEXT.with(|ctx| {
+                        ctx.borrow_mut().executor.poll_all_tasks();
+                    });
+                    match hyperware_process_lib::await_message() {
+                        Ok(message) => {
+                            if message.is_local() {
+
+                            }
+                        }
+                        Err(e) => {
+                            // TODO: Don't do it yet, we'll add error handling later
+                            kiprintln!("Failed to await message: {}", e);
+                        }
+                    }
                 }
             }
         }

@@ -44,11 +44,11 @@ thread_local! {
 }
 
 pub struct AppContext {
-    hidden_state: Option<HiddenState>,
-    executor: Executor,
-    response_registry: HashMap<String, Vec<u8>>,
-    current_path: Option<String>,
-    current_server: Option<*mut HttpServer>,
+    pub hidden_state: Option<HiddenState>,
+    pub executor: Executor,
+    pub response_registry: HashMap<String, Vec<u8>>,
+    pub current_path: Option<String>,
+    pub current_server: Option<*mut HttpServer>,
 }
 
 // Access function for the current path
