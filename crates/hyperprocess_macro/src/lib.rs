@@ -882,8 +882,24 @@ fn generate_message_handlers(
                             }
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketPush { channel_id, message_type } => {
-                            // TODO: Handle WebSocketPush
-                            hyperware_process_lib::logging::info!("WebSocketPush not yet implemented");
+                            let Some(blob) = message.blob() else {
+                                hyperware_process_lib::logging::warn!("Failed to get blob for WebSocketPush, exiting");
+                                return;
+                            };
+                            /*
+                            TODO: 
+                            We will have to take a custom function that comes from upwards 
+                            That function will be specified by the client code with the function that has the #[ws] attribute
+                            There can only be one function with the #[ws] attribute per process, just like for #[init]
+                            This function must take: 
+                            - state: &mut State
+                            - channel_id: u32
+                            - message_type: hyperware_process_lib::http::server::WsMessageType
+                            - blob: hyperware_process_lib::LazyLoadBlob
+
+
+                            Then we would just call it here. 
+                             */ 
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketOpen { path, channel_id } => {
                             let path = hyperware_app_common::get_path().unwrap();

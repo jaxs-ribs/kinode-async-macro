@@ -1,7 +1,8 @@
 #![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use hyperprocess_macro::hyperprocess;
 use hyperware_app_common::State;
-use hyperware_process_lib::kiprintln;
+use hyperware_process_lib::LazyLoadBlob;
+use hyperware_process_lib::{http::server::{WsMessageType}, kiprintln};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -117,8 +118,8 @@ impl AsyncRequesterState {
     }
 
     #[ws]
-    fn websocket(&mut self) {
-
+    fn websocket(&mut self, channel_id: u32, message_type: WsMessageType, blob: LazyLoadBlob) {
+        kiprintln!("Websocket called with: {:?}, {:?}, {:?}", channel_id, message_type, blob);
     }
 }
 
