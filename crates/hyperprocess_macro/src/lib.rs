@@ -355,7 +355,12 @@ fn validate_websocket_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     }
 
     if let syn::FnArg::Typed(pat_type) = blob_param {
-        if !pat_type.ty.to_token_stream().to_string().contains("LazyLoadBlob") {
+        if !pat_type
+            .ty
+            .to_token_stream()
+            .to_string()
+            .contains("LazyLoadBlob")
+        {
             return Err(syn::Error::new_spanned(
                 pat_type,
                 "Third parameter of WebSocket method must be blob: LazyLoadBlob",
@@ -930,7 +935,7 @@ fn generate_message_handlers(
                             hyperware_app_common::APP_CONTEXT.with(|ctx| {
                                 ctx.borrow_mut().current_path = Some(http_request.path().clone().expect("Failed to get path from HTTP request"));
                             });
-                            
+
                             // Get the blob containing the actual request
                             let Some(blob) = message.blob() else {
                                 hyperware_process_lib::logging::warn!("Failed to get blob for HTTP, sending BAD_REQUEST");
@@ -984,10 +989,10 @@ fn generate_message_handlers(
                                 hyperware_process_lib::logging::warn!("Failed to get blob for WebSocketPush, exiting");
                                 return;
                             };
-                            
+
                             // Call the websocket handler if it exists
                             #ws_method_call
-                            
+
                             // Save state if needed
                             unsafe {
                                 hyperware_app_common::maybe_save_state(&mut *state);
@@ -1213,9 +1218,32 @@ fn generate_component_impl(
                                 handle_remote_message(&mut state, message);
                             }
                         },
-                        Err(e) => {
-                            // We'll improve error handling later
-                            kiprintln!("Failed to await message: {}", e);
+                        Err(error) => {
+                            let kind = &error.kind;
+                            let target = &error.target;
+                            let body = String::from_utf8(error.message.body().to_vec())
+                                .map(|s| format!("\"{}\"", s))
+                                .unwrap_or_else(|_| format!("{:?}", error.message.body()));
+                            let context = error
+                                .context
+                                .as_ref()
+                                .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+
+                            hyperware_process_lib::kiprintln!(
+                                "SendError {{
+                            kind: {:?},
+                            target: {},
+                            body: {},
+                            context: {}
+                        }}",
+                                kind,
+                                target,
+                                body,
+                                context
+                                    .map(|s| format!("\"{}\"", s))
+                                    .unwrap_or("None".to_string())
+                            );
+
                         }
                     }
                 }
