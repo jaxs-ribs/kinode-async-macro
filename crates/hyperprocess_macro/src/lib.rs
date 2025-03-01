@@ -54,6 +54,13 @@ struct FunctionMetadata {
     is_http: bool,                   // Has #[http] attribute
 }
 
+// Enum for the different handler types
+enum HandlerType {
+    Local,
+    Remote,
+    Http
+}
+
 //------------------------------------------------------------------------------
 // Utility Functions
 //------------------------------------------------------------------------------
@@ -465,30 +472,55 @@ fn generate_debug_enum_strings(
     (debug_request_enum, debug_response_enum)
 }
 
-/// Generate handler match arms for request handling (works for both local and remote)
+/// Generate handler match arms for request handling (works for local, remote, and HTTP)
 fn generate_request_match_arms(
     handlers: &[&FunctionMetadata],
     self_ty: &Box<syn::Type>,
-    is_local: bool,
+    handler_type: HandlerType,
 ) -> proc_macro2::TokenStream {
     if handlers.is_empty() {
-        let message = if is_local {
-            "No local handlers defined but received a local request"
-        } else {
-            "No remote handlers defined but received a remote request"
+        let message = match handler_type {
+            HandlerType::Local => "No local handlers defined but received a local request",
+            HandlerType::Remote => "No remote handlers defined but received a remote request",
+            HandlerType::Http => "No HTTP handlers defined but received an HTTP request",
         };
         return quote! {
             hyperware_process_lib::logging::warn!(#message);
         };
     }
 
-    let message_param = if !is_local {
-        quote! { message, }
-    } else {
-        quote! {}
+    let type_name = match handler_type {
+        HandlerType::Local => "local",
+        HandlerType::Remote => "remote",
+        HandlerType::Http => "http",
     };
 
-    let log_prefix = if is_local { "local" } else { "remote" };
+    // Create response handling code based on handler type
+    let get_response_handling = |func: &FunctionMetadata, variant_name: &syn::Ident| -> proc_macro2::TokenStream {
+        match handler_type {
+            HandlerType::Local | HandlerType::Remote => {
+                quote! {
+                    let response = Response::#variant_name(result);
+                    let resp = hyperware_process_lib::Response::new()
+                        .body(serde_json::to_vec(&response).unwrap());
+                    kiprintln!("Sending {} response: {:?}", #type_name, response);
+                    resp.send().unwrap();
+                }
+            },
+            HandlerType::Http => {
+                quote! {
+                    let response = Response::#variant_name(result);
+                    let response_bytes = serde_json::to_vec(&response).unwrap();
+                    kiprintln!("Sending HTTP response: {:?}", response);
+                    hyperware_process_lib::http::server::send_response(
+                        hyperware_process_lib::http::StatusCode::OK, 
+                        None, 
+                        response_bytes
+                    );
+                }
+            }
+        }
+    };
 
     let dispatch_arms = handlers
         .iter()
@@ -496,14 +528,8 @@ fn generate_request_match_arms(
             let fn_name = &func.name;
             let variant_name = format_ident!("{}", &func.variant_name);
             
-            // Prepare response handling code that's common between sync and async handlers
-            let response_handling = quote! {
-                let response = Response::#variant_name(result);
-                let resp = hyperware_process_lib::Response::new()
-                    .body(serde_json::to_vec(&response).unwrap());
-                kiprintln!("Sending {} response: {:?}", #log_prefix, response);
-                resp.send().unwrap();
-            };
+            // Get the appropriate response handling code
+            let response_handling = get_response_handling(func, &variant_name);
             
             if func.is_async {
                 // Async function handling using state pointer
@@ -597,7 +623,6 @@ fn generate_request_match_arms(
         });
     
     // Add an explicit unreachable for other variants
-    let type_name = if is_local { "local" } else { "remote" };
     let unreachable_arm = quote! {
         _ => unreachable!(concat!("Non-", #type_name, " request variant received in ", #type_name, " handler"))
     };
@@ -615,7 +640,7 @@ fn generate_local_request_match_arms(
     local_handlers: &[&FunctionMetadata],
     self_ty: &Box<syn::Type>,
 ) -> proc_macro2::TokenStream {
-    generate_request_match_arms(local_handlers, self_ty, true)
+    generate_request_match_arms(local_handlers, self_ty, HandlerType::Local)
 }
 
 /// Generate remote handler match arms for request handling
@@ -623,7 +648,15 @@ fn generate_remote_request_match_arms(
     remote_handlers: &[&FunctionMetadata],
     self_ty: &Box<syn::Type>,
 ) -> proc_macro2::TokenStream {
-    generate_request_match_arms(remote_handlers, self_ty, false)
+    generate_request_match_arms(remote_handlers, self_ty, HandlerType::Remote)
+}
+
+/// Generate HTTP handler match arms for request handling
+fn generate_http_request_match_arms(
+    http_handlers: &[&FunctionMetadata],
+    self_ty: &Box<syn::Type>,
+) -> proc_macro2::TokenStream {
+    generate_request_match_arms(http_handlers, self_ty, HandlerType::Http)
 }
 
 /// Generate a debug string representation of a handler dispatch code
@@ -675,6 +708,13 @@ fn generate_debug_remote_handler_string(
     remote_handlers: &[&FunctionMetadata],
 ) -> String {
     generate_debug_handler_string(remote_handlers, "remote")
+}
+
+/// Generate a debug string representation of the HTTP handler dispatch code
+fn generate_debug_http_handler_string(
+    http_handlers: &[&FunctionMetadata],
+) -> String {
+    generate_debug_handler_string(http_handlers, "HTTP")
 }
 
 /// Remove our custom attributes from the implementation block
@@ -740,17 +780,15 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate debug strings
     let (debug_request_enum, debug_response_enum) = generate_debug_enum_strings(&function_metadata);
     
-    // Generate local handler match arms
+    // Generate handler match arms
     let local_request_match_arms = generate_local_request_match_arms(&local_handlers, self_ty);
-    
-    // Generate remote handler match arms
     let remote_request_match_arms = generate_remote_request_match_arms(&remote_handlers, self_ty);
+    let http_request_match_arms = generate_http_request_match_arms(&http_handlers, self_ty);
     
-    // Generate debug local handler string
+    // Generate debug handler strings
     let debug_local_handler_dispatch = generate_debug_local_handler_string(&local_handlers);
-
-    // Generate debug remote handler string
     let debug_remote_handler_dispatch = generate_debug_remote_handler_string(&remote_handlers);
+    let debug_http_handler_dispatch = generate_debug_http_handler_string(&http_handlers);
 
     // Clean the implementation block
     let cleaned_impl_block = clean_impl_block(&impl_block);
@@ -822,18 +860,23 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                 kiprintln!("{}", #debug_response_enum);
                 kiprintln!("}}");
                 
-                // Debug: Print the local handler dispatch code
+                // Debug: Print the handler dispatch code
                 kiprintln!("============= LOCAL HANDLER DISPATCH =============");
                 kiprintln!("// Pseudo-code representation of generated handler:");
                 kiprintln!("fn handle_local_request(state: &mut State, request: Request) {{");
                 kiprintln!("{}", #debug_local_handler_dispatch);
                 kiprintln!("}}");
                 
-                // Debug: Print the remote handler dispatch code
                 kiprintln!("============= REMOTE HANDLER DISPATCH ============");
                 kiprintln!("// Pseudo-code representation of generated handler:");
                 kiprintln!("fn handle_remote_request(state: &mut State, message: &Message, request: Request) {{");
                 kiprintln!("{}", #debug_remote_handler_dispatch);
+                kiprintln!("}}");
+                
+                kiprintln!("============= HTTP HANDLER DISPATCH ==============");
+                kiprintln!("// Pseudo-code representation of generated handler:");
+                kiprintln!("fn handle_http_request(state: &mut State, request: Request) {{");
+                kiprintln!("{}", #debug_http_handler_dispatch);
                 kiprintln!("}}");
                 
                 kiprintln!("Starting application...");
@@ -876,8 +919,75 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                     
                     match hyperware_process_lib::await_message() {
                         Ok(message) => {
-                            if message.is_local() {
-                                // Parse the message body as JSON
+                            // Check if this is an HTTP message from the HTTP server
+                            if message.is_local() && message.source().process == "http-server:distro:sys" {
+                                // Parse HTTP server request
+                                match serde_json::from_slice::<hyperware_process_lib::http::server::HttpServerRequest>(message.body()) {
+                                    Ok(http_server_request) => {
+                                        match http_server_request {
+                                            hyperware_process_lib::http::server::HttpServerRequest::Http(_) => {
+                                                // Get the blob containing the actual request
+                                                let Some(blob) = message.blob() else {
+                                                    hyperware_process_lib::logging::warn!("Failed to get blob for HTTP, sending BAD_REQUEST");
+                                                    hyperware_process_lib::http::server::send_response(
+                                                        hyperware_process_lib::http::StatusCode::BAD_REQUEST, 
+                                                        None, 
+                                                        vec![]
+                                                    );
+                                                    return;
+                                                };
+                                                
+                                                // Process HTTP request
+                                                match serde_json::from_slice::<serde_json::Value>(blob.bytes()) {
+                                                    Ok(req_value) => {
+                                                        match serde_json::from_value::<Request>(req_value.clone()) {
+                                                            Ok(request) => {
+                                                                // Handle the HTTP request
+                                                                #http_request_match_arms
+                                                                
+                                                                // Save state if needed
+                                                                hyperware_app_common::maybe_save_state(&state);
+                                                            },
+                                                            Err(e) => {
+                                                                hyperware_process_lib::logging::warn!("Failed to deserialize HTTP request into Request enum: {}", e);
+                                                                hyperware_process_lib::http::server::send_response(
+                                                                    hyperware_process_lib::http::StatusCode::BAD_REQUEST, 
+                                                                    None, 
+                                                                    format!("Invalid request format: {}", e).into_bytes()
+                                                                );
+                                                            }
+                                                        }
+                                                    },
+                                                    Err(e) => {
+                                                        hyperware_process_lib::logging::warn!("Failed to parse HTTP request as JSON: {}", e);
+                                                        hyperware_process_lib::http::server::send_response(
+                                                            hyperware_process_lib::http::StatusCode::BAD_REQUEST, 
+                                                            None, 
+                                                            format!("Invalid JSON: {}", e).into_bytes()
+                                                        );
+                                                    }
+                                                }
+                                            },
+                                            hyperware_process_lib::http::server::HttpServerRequest::WebSocketPush { channel_id, message_type } => {
+                                                // TODO: Handle WebSocketPush
+                                                hyperware_process_lib::logging::info!("WebSocketPush not yet implemented");
+                                            },
+                                            hyperware_process_lib::http::server::HttpServerRequest::WebSocketOpen { path, channel_id } => {
+                                                // TODO: Handle WebSocketOpen
+                                                hyperware_process_lib::logging::info!("WebSocketOpen not yet implemented");
+                                            },
+                                            hyperware_process_lib::http::server::HttpServerRequest::WebSocketClose(channel_id) => {
+                                                // TODO: Handle WebSocketClose
+                                                hyperware_process_lib::logging::info!("WebSocketClose not yet implemented");
+                                            }
+                                        }
+                                    },
+                                    Err(e) => {
+                                        hyperware_process_lib::logging::warn!("Failed to parse HTTP server request: {}", e);
+                                    }
+                                }
+                            } else if message.is_local() {
+                                // Regular local message handling
                                 match serde_json::from_slice::<serde_json::Value>(message.body()) {
                                     Ok(req_value) => {
                                         // Process the local request based on our handlers
@@ -899,7 +1009,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     }
                                 }
                             } else {
-                                // Handle remote messages
+                                // Remote message handling
                                 match serde_json::from_slice::<serde_json::Value>(message.body()) {
                                     Ok(req_value) => {
                                         // Process the remote request based on our handlers

@@ -79,7 +79,7 @@ impl AsyncRequesterState {
     }
 
     #[http]
-    fn increment_counter_3(&mut self, string_val: String) -> f32 {
+    async fn increment_counter_3(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
         kiprintln!(
             "We have been called with thes following values: {:?}",
@@ -102,5 +102,5 @@ m our@hyperdriver:async-app:uncentered.os '{"IncrementCounter": [42, "abc", 3.14
 m our@hyperdriver:async-app:uncentered.os '{"IncrementCounter2": [42.0, ["abc", "def"], true]}'
 m our@hyperdriver:async-app:uncentered.os '{"IncrementCounterAsync": [42, "test-user"]}'
 
-curl -X POST -H "Content-Type: application/json" -d '{"IncrementCounter3": ["test-string"]}' http://localhost:8080/hyperdriver:async-app:uncentered.os/api
+curl -X POST -H "Content-Type: application/json" -d '{"IncrementCounter3": "test-string"}' http://localhost:8080/hyperdriver:async-app:uncentered.os/api
 */
