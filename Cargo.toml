@@ -1,10 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "async-requester",
-    "async-receiver-a",
-    "async-receiver-b",
-    "async-receiver-c",
+    "hyperdriver",
     "lib/shared",
 ]
 
