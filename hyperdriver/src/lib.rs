@@ -23,6 +23,10 @@ impl State for AsyncRequesterState {
         Binding::Http {
             path: "/api",
             config: HttpBindingConfig::new(false, false, false, None),
+        }, 
+        Binding::Ws {
+            path: "/ws",
+            config: WsBindingConfig::new(false, false, false),
         }
     ],
     save_config = SaveOptions::EveryMessage,
@@ -120,6 +124,8 @@ impl AsyncRequesterState {
     #[ws]
     fn websocket(&mut self, channel_id: u32, message_type: WsMessageType, blob: LazyLoadBlob) {
         kiprintln!("Websocket called with: {:?}, {:?}, {:?}", channel_id, message_type, blob);
+        self.request_count += 1;
+        kiprintln!("Counter: {}", self.request_count);
     }
 }
 

@@ -98,6 +98,12 @@ struct InitMethodDetails {
     call: proc_macro2::TokenStream,
 }
 
+/// WebSocket method details for code generation
+struct WsMethodDetails {
+    identifier: proc_macro2::TokenStream,
+    call: proc_macro2::TokenStream,
+}
+
 //------------------------------------------------------------------------------
 // Parse Implementation
 //------------------------------------------------------------------------------
@@ -303,6 +309,71 @@ fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     Ok(())
 }
 
+/// Validate the websocket method signature
+fn validate_websocket_method(method: &syn::ImplItemFn) -> syn::Result<()> {
+    // Ensure first param is &mut self
+    if !has_valid_self_receiver(method) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "WebSocket method must take &mut self as first parameter",
+        ));
+    }
+
+    // Ensure there are exactly 4 parameters (including &mut self)
+    if method.sig.inputs.len() != 4 {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "WebSocket method must take exactly 3 additional parameters: channel_id, message_type, and blob",
+        ));
+    }
+
+    // Get parameters (excluding &mut self)
+    let params: Vec<_> = method.sig.inputs.iter().skip(1).collect();
+
+    // Check parameter types (we're not doing exact type checking, just rough check)
+    let channel_id_param = &params[0];
+    let message_type_param = &params[1];
+    let blob_param = &params[2];
+
+    if let syn::FnArg::Typed(pat_type) = channel_id_param {
+        if !pat_type.ty.to_token_stream().to_string().contains("u32") {
+            return Err(syn::Error::new_spanned(
+                pat_type,
+                "First parameter of WebSocket method must be channel_id: u32",
+            ));
+        }
+    }
+
+    if let syn::FnArg::Typed(pat_type) = message_type_param {
+        let type_str = pat_type.ty.to_token_stream().to_string();
+        if !type_str.contains("WsMessageType") && !type_str.contains("MessageType") {
+            return Err(syn::Error::new_spanned(
+                pat_type,
+                "Second parameter of WebSocket method must be message_type: WsMessageType",
+            ));
+        }
+    }
+
+    if let syn::FnArg::Typed(pat_type) = blob_param {
+        if !pat_type.ty.to_token_stream().to_string().contains("LazyLoadBlob") {
+            return Err(syn::Error::new_spanned(
+                pat_type,
+                "Third parameter of WebSocket method must be blob: LazyLoadBlob",
+            ));
+        }
+    }
+
+    // Validate return type (must be unit)
+    if !matches!(method.sig.output, ReturnType::Default) {
+        return Err(syn::Error::new_spanned(
+            &method.sig.output,
+            "WebSocket method must not return a value",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Validate a request-response function signature
 fn validate_request_response_function(method: &syn::ImplItemFn) -> syn::Result<()> {
     // Ensure first param is &mut self
@@ -328,7 +399,7 @@ fn analyze_methods(
     impl_block: &ItemImpl,
 ) -> syn::Result<(
     Option<syn::Ident>,    // init method
-    Option<syn::Ident>,    // ws method (keeping for future)
+    Option<syn::Ident>,    // ws method
     Vec<FunctionMetadata>, // metadata for request/response methods
 )> {
     let mut init_method = None;
@@ -373,7 +444,7 @@ fn analyze_methods(
                         "#[ws] cannot be combined with other attributes",
                     ));
                 }
-                // TODO: Add proper validation when implementing ws support
+                validate_websocket_method(method)?;
                 if ws_method.is_some() {
                     return Err(syn::Error::new_spanned(
                         method,
@@ -820,10 +891,29 @@ fn init_method_opt_to_call(init_method: &Option<syn::Ident>) -> proc_macro2::Tok
     }
 }
 
+/// Convert optional WebSocket method to token stream for identifier
+fn ws_method_opt_to_token(ws_method: &Option<syn::Ident>) -> proc_macro2::TokenStream {
+    if let Some(method_name) = ws_method {
+        quote! { Some(stringify!(#method_name)) }
+    } else {
+        quote! { None::<&str> }
+    }
+}
+
+/// Convert optional WebSocket method to token stream for method call
+fn ws_method_opt_to_call(ws_method: &Option<syn::Ident>) -> proc_macro2::TokenStream {
+    if let Some(method_name) = ws_method {
+        quote! { unsafe { (*state).#method_name(channel_id, message_type, blob) }; }
+    } else {
+        quote! {}
+    }
+}
+
 /// Generate handler functions for message types
 fn generate_message_handlers(
     self_ty: &Box<syn::Type>,
     handler_arms: &HandlerDispatch,
+    ws_method_call: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let http_request_match_arms = &handler_arms.http;
     let local_request_match_arms = &handler_arms.local;
@@ -836,7 +926,11 @@ fn generate_message_handlers(
             match serde_json::from_slice::<hyperware_process_lib::http::server::HttpServerRequest>(message.body()) {
                 Ok(http_server_request) => {
                     match http_server_request {
-                        hyperware_process_lib::http::server::HttpServerRequest::Http(_) => {
+                        hyperware_process_lib::http::server::HttpServerRequest::Http(http_request) => {
+                            hyperware_app_common::APP_CONTEXT.with(|ctx| {
+                                ctx.borrow_mut().current_path = Some(http_request.path().clone().expect("Failed to get path from HTTP request"));
+                            });
+                            
                             // Get the blob containing the actual request
                             let Some(blob) = message.blob() else {
                                 hyperware_process_lib::logging::warn!("Failed to get blob for HTTP, sending BAD_REQUEST");
@@ -880,33 +974,31 @@ fn generate_message_handlers(
                                     );
                                 }
                             }
+                            hyperware_app_common::APP_CONTEXT.with(|ctx| {
+                                ctx.borrow_mut().current_path = None;
+                            });
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketPush { channel_id, message_type } => {
+                            hyperware_process_lib::kiprintln!("WebSocketPush called with: {:?}, {:?}", channel_id, message_type);
                             let Some(blob) = message.blob() else {
                                 hyperware_process_lib::logging::warn!("Failed to get blob for WebSocketPush, exiting");
                                 return;
                             };
-                            /*
-                            TODO: 
-                            We will have to take a custom function that comes from upwards 
-                            That function will be specified by the client code with the function that has the #[ws] attribute
-                            There can only be one function with the #[ws] attribute per process, just like for #[init]
-                            This function must take: 
-                            - state: &mut State
-                            - channel_id: u32
-                            - message_type: hyperware_process_lib::http::server::WsMessageType
-                            - blob: hyperware_process_lib::LazyLoadBlob
-
-
-                            Then we would just call it here. 
-                             */ 
+                            
+                            // Call the websocket handler if it exists
+                            #ws_method_call
+                            
+                            // Save state if needed
+                            unsafe {
+                                hyperware_app_common::maybe_save_state(&mut *state);
+                            }
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketOpen { path, channel_id } => {
-                            let path = hyperware_app_common::get_path().unwrap();
+                            hyperware_process_lib::kiprintln!("WebSocketOpen called with: {:?}, {:?}", path, channel_id);
                             hyperware_app_common::get_server().unwrap().handle_websocket_open(&path, channel_id);
-
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketClose(channel_id) => {
+                            hyperware_process_lib::kiprintln!("WebSocketClose called with: {:?}", channel_id);
                             hyperware_app_common::get_server().unwrap().handle_websocket_close(channel_id);
                         }
                     }
@@ -981,6 +1073,7 @@ fn generate_component_impl(
     debug_request_enum: &str,
     debug_response_enum: &str,
     init_method_details: &InitMethodDetails,
+    ws_method_details: &WsMethodDetails,
     handler_arms: &HandlerDispatch,
     debug_handler_dispatches: &DebugHandlerDispatch,
 ) -> proc_macro2::TokenStream {
@@ -1007,12 +1100,13 @@ fn generate_component_impl(
 
     let init_method_ident = &init_method_details.identifier;
     let init_method_call = &init_method_details.call;
+    let ws_method_call = &ws_method_details.call;
     let debug_local_handler_dispatch = &debug_handler_dispatches.local;
     let debug_remote_handler_dispatch = &debug_handler_dispatches.remote;
     let debug_http_handler_dispatch = &debug_handler_dispatches.http;
 
     // Generate message handler functions
-    let message_handlers = generate_message_handlers(self_ty, handler_arms);
+    let message_handlers = generate_message_handlers(self_ty, handler_arms, ws_method_call);
 
     quote! {
         wit_bindgen::generate!({
@@ -1023,6 +1117,7 @@ fn generate_component_impl(
         });
 
         use hyperware_process_lib::http::server::HttpBindingConfig;
+        use hyperware_process_lib::http::server::WsBindingConfig;
         use hyperware_app_common::Binding;
 
         #cleaned_impl_block
@@ -1092,6 +1187,9 @@ fn generate_component_impl(
 
                 // Setup server with endpoints
                 let mut server = hyperware_app_common::setup_server(ui_config.as_ref(), &endpoints);
+                hyperware_app_common::APP_CONTEXT.with(|ctx| {
+                    ctx.borrow_mut().current_server = Some(&mut server);
+                });
 
                 // Initialize app state
                 if #init_method_ident.is_some() {
@@ -1186,6 +1284,12 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         call: init_method_opt_to_call(&init_method),
     };
 
+    // Prepare WebSocket method details for code generation
+    let ws_method_details = WsMethodDetails {
+        identifier: ws_method_opt_to_token(&ws_method),
+        call: ws_method_opt_to_call(&ws_method),
+    };
+
     // Generate the final output
     generate_component_impl(
         &args,
@@ -1196,6 +1300,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         &debug_request_enum,
         &debug_response_enum,
         &init_method_details,
+        &ws_method_details,
         &handler_arms,
         &debug_handler_dispatches,
     )
