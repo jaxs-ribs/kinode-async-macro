@@ -1211,7 +1211,16 @@ fn generate_component_impl(
                         Ok(message) => {
                             match message {
                                 hyperware_process_lib::Message::Response {body, context, ..} => {
-                                    // TODO: We need to update the callback handlers to make async work. 
+                                    // TODO: We need to update the callback handlers to make async work.
+                                    let correlation_id = context
+                                        .as_deref()
+                                        .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+                                        .unwrap_or_else(|| "no context".to_string());
+
+                                    hyperware_app_common::APP_CONTEXT.with(|ctx| {
+                                        let mut ctx_mut = ctx.borrow_mut();
+                                        ctx_mut.response_registry.insert(correlation_id, body);
+                                    });
                                 }
                                 hyperware_process_lib::Message::Request { .. } => {
                                     if message.is_local() && message.source().process == "http-server:distro:sys" {
@@ -1225,7 +1234,6 @@ fn generate_component_impl(
                             }
                         },
                         Err(error) => {
-                            // TODO: We need to update the callback handlers to make async work. 
                             let kind = &error.kind;
                             let target = &error.target;
                             let body = String::from_utf8(error.message.body().to_vec())
@@ -1250,6 +1258,23 @@ fn generate_component_impl(
                                     .map(|s| format!("\"{}\"", s))
                                     .unwrap_or("None".to_string())
                             );
+
+                            if let hyperware_process_lib::SendError {
+                                kind,
+                                context: Some(context),
+                                ..
+                            } = &error
+                            {
+                                // Convert context bytes to correlation_id string
+                                if let Ok(correlation_id) = String::from_utf8(context.to_vec()) {
+                                    // Serialize None as the response
+                                    let none_response = serde_json::to_vec(kind).unwrap();
+
+                                    hyperware_app_common::APP_CONTEXT.with(|ctx| {
+                                        ctx.borrow_mut().response_registry.insert(correlation_id, none_response);
+                                    });
+                                }
+                            }
 
                         }
                     }
