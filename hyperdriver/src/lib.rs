@@ -32,6 +32,7 @@ impl AsyncRequesterState {
     fn initialize(&mut self) {
         kiprintln!("Initializing Async Requester");
         self.request_count = 0;
+        kiprintln!("The counter is now {}", self.request_count);
     }
 
     #[local]
@@ -42,16 +43,31 @@ impl AsyncRequesterState {
         yet_another_value: f32,
     ) -> String {
         self.request_count += 1;
-        kiprintln!("Called with: {} {} {}", value, another_value, yet_another_value);
+        kiprintln!(
+            "Called with: {} {} {}",
+            value,
+            another_value,
+            yet_another_value
+        );
         kiprintln!("Counter: {}", self.request_count);
         "some string".to_string()
     }
 
     #[remote]
     #[local]
-    fn increment_counter_2(&mut self, value: f64, another_value: Vec<String>, yet_another_value: bool) -> Vec<i32> {
+    fn increment_counter_2(
+        &mut self,
+        value: f64,
+        another_value: Vec<String>,
+        yet_another_value: bool,
+    ) -> Vec<i32> {
         self.request_count += 1;
-        kiprintln!("Called with: {} {:?} {}", value, another_value, yet_another_value);
+        kiprintln!(
+            "Called with: {} {:?} {}",
+            value,
+            another_value,
+            yet_another_value
+        );
         kiprintln!("Counter: {}", self.request_count);
         vec![42, 43, 44]
     }
@@ -78,6 +94,7 @@ impl AsyncRequesterState {
         0.0
     }
 
+    #[local]
     #[http]
     async fn increment_counter_3(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
@@ -86,6 +103,22 @@ impl AsyncRequesterState {
             string_val
         );
         0.0
+    }
+
+    #[local]
+    #[http]
+    async fn increment_counter_4(&mut self, string_val: String) -> f32 {
+        self.request_count += 1;
+        kiprintln!(
+            "We have been called with thes following values: {:?}",
+            string_val
+        );
+        0.0
+    }
+
+    #[ws]
+    fn websocket(&mut self) {
+
     }
 }
 
@@ -103,4 +136,5 @@ m our@hyperdriver:async-app:uncentered.os '{"IncrementCounter2": [42.0, ["abc", 
 m our@hyperdriver:async-app:uncentered.os '{"IncrementCounterAsync": [42, "test-user"]}'
 
 curl -X POST -H "Content-Type: application/json" -d '{"IncrementCounter3": "test-string"}' http://localhost:8080/hyperdriver:async-app:uncentered.os/api
+curl -X POST -H "Content-Type: application/json" -d '{"IncrementCounter4": "test-string"}' http://localhost:8080/hyperdriver:async-app:uncentered.os/api
 */

@@ -1,16 +1,15 @@
 #![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 
 //! # HyperProcess Procedural Macro
-//! 
+//!
 //! This macro generates boilerplate code for HyperProcess applications,
 //! analyzing method attributes to create appropriate request/response handling.
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, spanned::Spanned, 
-    Expr, ItemImpl, Meta, ReturnType,
-    punctuated::Punctuated, token::Comma,
+    parse_macro_input, punctuated::Punctuated, spanned::Spanned, token::Comma, Expr, ItemImpl,
+    Meta, ReturnType,
 };
 
 //------------------------------------------------------------------------------
@@ -44,66 +43,63 @@ struct HyperProcessArgs {
 
 /// Metadata for a function in the implementation block
 struct FunctionMetadata {
-    name: syn::Ident,                // Original function name
-    variant_name: String,            // CamelCase variant name
-    params: Vec<syn::Type>,          // Parameter types (excluding &mut self)
-    return_type: Option<syn::Type>,  // Return type (None for functions returning ())
-    is_async: bool,                  // Whether function is async
-    is_local: bool,                  // Has #[local] attribute
-    is_remote: bool,                 // Has #[remote] attribute
-    is_http: bool,                   // Has #[http] attribute
+    name: syn::Ident,               // Original function name
+    variant_name: String,           // CamelCase variant name
+    params: Vec<syn::Type>,         // Parameter types (excluding &mut self)
+    return_type: Option<syn::Type>, // Return type (None for functions returning ())
+    is_async: bool,                 // Whether function is async
+    is_local: bool,                 // Has #[local] attribute
+    is_remote: bool,                // Has #[remote] attribute
+    is_http: bool,                  // Has #[http] attribute
 }
 
-// Enum for the different handler types
+/// Enum for the different handler types
+#[derive(Copy, Clone)]
 enum HandlerType {
     Local,
     Remote,
-    Http
+    Http,
 }
 
-//------------------------------------------------------------------------------
-// Utility Functions
-//------------------------------------------------------------------------------
+/// Grouped handlers by type
+struct HandlerGroups<'a> {
+    local: Vec<&'a FunctionMetadata>,
+    remote: Vec<&'a FunctionMetadata>,
+    http: Vec<&'a FunctionMetadata>,
+}
 
-/// Convert a snake_case string to CamelCase
-fn to_camel_case(snake: &str) -> String {
-    let mut camel = String::new();
-    let mut capitalize_next = true;
-    
-    for c in snake.chars() {
-        if c == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            camel.push(c.to_ascii_uppercase());
-            capitalize_next = false;
-        } else {
-            camel.push(c);
+impl<'a> HandlerGroups<'a> {
+    fn from_function_metadata(metadata: &'a [FunctionMetadata]) -> Self {
+        HandlerGroups {
+            local: metadata.iter().filter(|f| f.is_local).collect(),
+            remote: metadata.iter().filter(|f| f.is_remote).collect(),
+            http: metadata.iter().filter(|f| f.is_http).collect(),
         }
     }
-    
-    camel
 }
 
-/// Parse a string literal from an expression
-fn parse_string_literal(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String> {
-    if let Expr::Lit(expr_lit) = expr {
-        if let syn::Lit::Str(lit) = &expr_lit.lit {
-            Ok(lit.value())
-        } else {
-            Err(syn::Error::new(span, "Expected string literal"))
-        }
-    } else {
-        Err(syn::Error::new(span, "Expected string literal"))
-    }
+/// Handler dispatch code fragments
+struct HandlerDispatch {
+    local: proc_macro2::TokenStream,
+    remote: proc_macro2::TokenStream,
+    http: proc_macro2::TokenStream,
 }
 
-/// Check if a method has a specific attribute
-fn has_attribute(method: &syn::ImplItemFn, attr_name: &str) -> bool {
-    method.attrs.iter().any(|attr| attr.path().is_ident(attr_name))
+/// Debug handler dispatch strings
+struct DebugHandlerDispatch {
+    local: String,
+    remote: String,
+    http: String,
+}
+
+/// Init method details for code generation
+struct InitMethodDetails {
+    identifier: proc_macro2::TokenStream,
+    call: proc_macro2::TokenStream,
 }
 
 //------------------------------------------------------------------------------
-// Parsing Implementation
+// Parse Implementation
 //------------------------------------------------------------------------------
 
 /// Implement Parse for our MetaList newtype wrapper
@@ -120,6 +116,105 @@ impl syn::parse::Parse for MetaList {
         Ok(MetaList(args))
     }
 }
+
+//------------------------------------------------------------------------------
+// Utility Functions
+//------------------------------------------------------------------------------
+
+/// Convert a snake_case string to CamelCase
+fn to_camel_case(snake: &str) -> String {
+    let mut camel = String::new();
+    let mut capitalize_next = true;
+
+    for c in snake.chars() {
+        if c == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            camel.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            camel.push(c);
+        }
+    }
+
+    camel
+}
+
+/// Parse a string literal from an expression
+fn parse_string_literal(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String> {
+    if let Expr::Lit(expr_lit) = expr {
+        if let syn::Lit::Str(lit) = &expr_lit.lit {
+            Ok(lit.value())
+        } else {
+            Err(syn::Error::new(span, "Expected string literal"))
+        }
+    } else {
+        Err(syn::Error::new(span, "Expected string literal"))
+    }
+}
+
+/// Parse the UI expression (handling Some() wrapper)
+fn parse_ui_expr(expr: &Expr) -> syn::Result<Option<Expr>> {
+    if let Expr::Call(call) = expr {
+        if let Expr::Path(path) = &*call.func {
+            if path
+                .path
+                .segments
+                .last()
+                .map(|s| s.ident == "Some")
+                .unwrap_or(false)
+            {
+                if call.args.len() == 1 {
+                    return Ok(Some(call.args[0].clone()));
+                } else {
+                    return Err(syn::Error::new(
+                        call.span(),
+                        "Some must have exactly one argument",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(Some(expr.clone()))
+}
+
+/// Check if a method has a specific attribute
+fn has_attribute(method: &syn::ImplItemFn, attr_name: &str) -> bool {
+    method
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident(attr_name))
+}
+
+/// Remove our custom attributes from the implementation block
+fn clean_impl_block(impl_block: &ItemImpl) -> ItemImpl {
+    let mut cleaned_impl_block = impl_block.clone();
+    for item in &mut cleaned_impl_block.items {
+        if let syn::ImplItem::Fn(method) = item {
+            method.attrs.retain(|attr| {
+                !attr.path().is_ident("init")
+                    && !attr.path().is_ident("http")
+                    && !attr.path().is_ident("local")
+                    && !attr.path().is_ident("remote")
+                    && !attr.path().is_ident("ws")
+            });
+        }
+    }
+    cleaned_impl_block
+}
+
+/// Check if a method has a valid self receiver (&mut self)
+fn has_valid_self_receiver(method: &syn::ImplItemFn) -> bool {
+    method
+        .sig
+        .inputs
+        .first()
+        .map_or(false, |arg| matches!(arg, syn::FnArg::Receiver(_)))
+}
+
+//------------------------------------------------------------------------------
+// Argument Parsing Functions
+//------------------------------------------------------------------------------
 
 /// Parse the arguments to the hyperprocess macro
 fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
@@ -150,28 +245,7 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
                     widget = Some(parse_string_literal(&nv.value, nv.value.span())?);
                 }
                 "ui" => {
-                    if let Expr::Call(call) = &nv.value {
-                        if let Expr::Path(path) = &*call.func {
-                            if path
-                                .path
-                                .segments
-                                .last()
-                                .map(|s| s.ident == "Some")
-                                .unwrap_or(false)
-                            {
-                                if call.args.len() == 1 {
-                                    ui = Some(call.args[0].clone());
-                                } else {
-                                    return Err(syn::Error::new(
-                                        call.span(),
-                                        "Some must have exactly one argument",
-                                    ));
-                                }
-                            }
-                        }
-                    } else {
-                        ui = Some(nv.value.clone());
-                    }
+                    ui = parse_ui_expr(&nv.value)?;
                 }
                 "endpoints" => endpoints = Some(nv.value.clone()),
                 "save_config" => save_config = Some(nv.value.clone()),
@@ -203,7 +277,7 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
 /// Validate the init method signature
 fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     // Ensure first param is &mut self
-    if method.sig.inputs.is_empty() || !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
+    if !has_valid_self_receiver(method) {
         return Err(syn::Error::new_spanned(
             &method.sig,
             "Init method must take &mut self as first parameter",
@@ -232,16 +306,16 @@ fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
 /// Validate a request-response function signature
 fn validate_request_response_function(method: &syn::ImplItemFn) -> syn::Result<()> {
     // Ensure first param is &mut self
-    if method.sig.inputs.is_empty() || !matches!(method.sig.inputs.first(), Some(syn::FnArg::Receiver(_))) {
+    if !has_valid_self_receiver(method) {
         return Err(syn::Error::new_spanned(
             &method.sig,
             "Request-response handlers must take &mut self as their first parameter",
         ));
     }
-    
+
     // No limit on additional parameters - we support any number
     // No validation for return type - any return type is allowed
-    
+
     Ok(())
 }
 
@@ -253,9 +327,9 @@ fn validate_request_response_function(method: &syn::ImplItemFn) -> syn::Result<(
 fn analyze_methods(
     impl_block: &ItemImpl,
 ) -> syn::Result<(
-    Option<syn::Ident>,          // init method
-    Option<syn::Ident>,          // ws method (keeping for future)
-    Vec<FunctionMetadata>,       // metadata for request/response methods
+    Option<syn::Ident>,    // init method
+    Option<syn::Ident>,    // ws method (keeping for future)
+    Vec<FunctionMetadata>, // metadata for request/response methods
 )> {
     let mut init_method = None;
     let mut ws_method = None;
@@ -264,7 +338,7 @@ fn analyze_methods(
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
             let ident = method.sig.ident.clone();
-            
+
             // Check for method attributes
             let has_init = has_attribute(method, "init");
             let has_http = has_attribute(method, "http");
@@ -314,10 +388,7 @@ fn analyze_methods(
             if has_http || has_local || has_remote {
                 validate_request_response_function(method)?;
                 function_metadata.push(extract_function_metadata(
-                    method, 
-                    has_local, 
-                    has_remote, 
-                    has_http
+                    method, has_local, has_remote, has_http,
                 ));
             }
         }
@@ -334,9 +405,12 @@ fn extract_function_metadata(
     is_http: bool,
 ) -> FunctionMetadata {
     let ident = method.sig.ident.clone();
-    
+
     // Extract parameter types (skipping &mut self)
-    let params = method.sig.inputs.iter()
+    let params = method
+        .sig
+        .inputs
+        .iter()
         .skip(1)
         .filter_map(|input| {
             if let syn::FnArg::Typed(pat_type) = input {
@@ -355,7 +429,7 @@ fn extract_function_metadata(
 
     // Create variant name (snake_case to CamelCase)
     let variant_name = to_camel_case(&ident.to_string());
-    
+
     FunctionMetadata {
         name: ident,
         variant_name,
@@ -369,7 +443,7 @@ fn extract_function_metadata(
 }
 
 //------------------------------------------------------------------------------
-// Code Generation Functions
+// Enum Generation Functions
 //------------------------------------------------------------------------------
 
 /// Generate Request and Response enums based on function metadata
@@ -383,25 +457,13 @@ fn generate_request_response_enums(
     // Request enum variants
     let request_variants = function_metadata.iter().map(|func| {
         let variant_name = format_ident!("{}", &func.variant_name);
-        
-        if func.params.is_empty() {
-            // Unit variant for functions with no parameters
-            quote! { #variant_name }
-        } else if func.params.len() == 1 {
-            // Simple tuple variant for single parameter
-            let param_type = &func.params[0];
-            quote! { #variant_name(#param_type) }
-        } else {
-            // Tuple variant with multiple types for multiple parameters
-            let param_types = &func.params;
-            quote! { #variant_name(#(#param_types),*) }
-        }
+        generate_enum_variant(&variant_name, &func.params)
     });
 
     // Response enum variants
     let response_variants = function_metadata.iter().map(|func| {
         let variant_name = format_ident!("{}", &func.variant_name);
-        
+
         if let Some(return_type) = &func.return_type {
             let type_str = return_type.to_token_stream().to_string();
             if type_str == "()" {
@@ -430,50 +492,124 @@ fn generate_request_response_enums(
             enum Response {
                 #(#response_variants),*
             }
-        }
+        },
     )
 }
 
+/// Generate a token stream for an enum variant based on parameter types
+fn generate_enum_variant(
+    variant_name: &syn::Ident,
+    params: &[syn::Type],
+) -> proc_macro2::TokenStream {
+    if params.is_empty() {
+        // Unit variant for functions with no parameters
+        quote! { #variant_name }
+    } else if params.len() == 1 {
+        // Simple tuple variant for single parameter
+        let param_type = &params[0];
+        quote! { #variant_name(#param_type) }
+    } else {
+        // Tuple variant with multiple types for multiple parameters
+        quote! { #variant_name(#(#params),*) }
+    }
+}
+
+//------------------------------------------------------------------------------
+// Debug String Generation Functions
+//------------------------------------------------------------------------------
+
 /// Generate debug string representations of the Request and Response enums
-fn generate_debug_enum_strings(
-    function_metadata: &[FunctionMetadata],
-) -> (String, String) {
-    let debug_request_enum = function_metadata.iter().map(|func| {
-        let variant_name = &func.variant_name;
-        
-        if func.params.is_empty() {
-            format!("  {}", variant_name)
-        } else if func.params.len() == 1 {
-            let param_type = func.params[0].to_token_stream().to_string();
-            format!("  {}({})", variant_name, param_type)
-        } else {
-            let param_types: Vec<_> = func.params.iter()
-                .map(|ty| ty.to_token_stream().to_string())
-                .collect();
-            format!("  {}({})", variant_name, param_types.join(", "))
-        }
-    }).collect::<Vec<_>>().join("\n");
-    
-    let debug_response_enum = function_metadata.iter().map(|func| {
-        let variant_name = &func.variant_name;
-        
-        if let Some(return_type) = &func.return_type {
-            let type_str = return_type.to_token_stream().to_string();
-            if type_str == "()" {
-                format!("  {}", variant_name)
+fn generate_debug_enum_strings(function_metadata: &[FunctionMetadata]) -> (String, String) {
+    let debug_request_enum = function_metadata
+        .iter()
+        .map(|func| generate_debug_enum_variant(&func.variant_name, &func.params))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let debug_response_enum = function_metadata
+        .iter()
+        .map(|func| {
+            let variant_name = &func.variant_name;
+
+            if let Some(return_type) = &func.return_type {
+                let type_str = return_type.to_token_stream().to_string();
+                if type_str == "()" {
+                    format!("  {}", variant_name)
+                } else {
+                    format!("  {}({})", variant_name, type_str)
+                }
             } else {
-                format!("  {}({})", variant_name, type_str)
+                format!("  {}", variant_name)
             }
-        } else {
-            format!("  {}", variant_name)
-        }
-    }).collect::<Vec<_>>().join("\n");
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     (debug_request_enum, debug_response_enum)
 }
 
-/// Generate handler match arms for request handling (works for local, remote, and HTTP)
-fn generate_request_match_arms(
+/// Generate a debug string for an enum variant
+fn generate_debug_enum_variant(variant_name: &str, params: &[syn::Type]) -> String {
+    if params.is_empty() {
+        format!("  {}", variant_name)
+    } else if params.len() == 1 {
+        let param_type = params[0].to_token_stream().to_string();
+        format!("  {}({})", variant_name, param_type)
+    } else {
+        let param_types: Vec<_> = params
+            .iter()
+            .map(|ty| ty.to_token_stream().to_string())
+            .collect();
+        format!("  {}({})", variant_name, param_types.join(", "))
+    }
+}
+
+/// Generate a debug string representation of a handler dispatch code
+fn generate_debug_handler_string(handlers: &[&FunctionMetadata], handler_type: &str) -> String {
+    if handlers.is_empty() {
+        return format!("// No {} handlers defined", handler_type).to_string();
+    }
+
+    let debug_cases = handlers
+        .iter()
+        .map(|func| {
+            let fn_name = &func.name;
+            let variant_name = &func.variant_name;
+            let async_keyword = if func.is_async { "async " } else { "" };
+
+            if func.params.is_empty() {
+                format!(
+                    "    Request::{} => {{ /* Call state.{}{}() */ }}",
+                    variant_name, async_keyword, fn_name
+                )
+            } else if func.params.len() == 1 {
+                format!(
+                    "    Request::{}(param) => {{ /* Call state.{}{}(param) */ }}",
+                    variant_name, async_keyword, fn_name
+                )
+            } else {
+                let param_count = func.params.len();
+                let param_names: Vec<_> = (0..param_count).map(|i| format!("param{}", i)).collect();
+                let params_list = param_names.join(", ");
+
+                format!(
+                    "    Request::{}({}) => {{ /* Call state.{}{}({}) */ }}",
+                    variant_name, params_list, async_keyword, fn_name, params_list
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("match request {{\n{}\n}}", debug_cases)
+}
+
+//------------------------------------------------------------------------------
+// Handler Generation Functions
+//------------------------------------------------------------------------------
+
+/// Generate handler match arms for request handling
+fn generate_handler_dispatch(
     handlers: &[&FunctionMetadata],
     self_ty: &Box<syn::Type>,
     handler_type: HandlerType,
@@ -495,138 +631,15 @@ fn generate_request_match_arms(
         HandlerType::Http => "http",
     };
 
-    // Create response handling code based on handler type
-    let get_response_handling = |func: &FunctionMetadata, variant_name: &syn::Ident| -> proc_macro2::TokenStream {
-        match handler_type {
-            HandlerType::Local | HandlerType::Remote => {
-                quote! {
-                    let response = Response::#variant_name(result);
-                    let resp = hyperware_process_lib::Response::new()
-                        .body(serde_json::to_vec(&response).unwrap());
-                    kiprintln!("Sending {} response: {:?}", #type_name, response);
-                    resp.send().unwrap();
-                }
-            },
-            HandlerType::Http => {
-                quote! {
-                    let response = Response::#variant_name(result);
-                    let response_bytes = serde_json::to_vec(&response).unwrap();
-                    kiprintln!("Sending HTTP response: {:?}", response);
-                    hyperware_process_lib::http::server::send_response(
-                        hyperware_process_lib::http::StatusCode::OK, 
-                        None, 
-                        response_bytes
-                    );
-                }
-            }
-        }
-    };
-
     let dispatch_arms = handlers
         .iter()
-        .map(|func| {
-            let fn_name = &func.name;
-            let variant_name = format_ident!("{}", &func.variant_name);
-            
-            // Get the appropriate response handling code
-            let response_handling = get_response_handling(func, &variant_name);
-            
-            if func.is_async {
-                // Async function handling using state pointer
-                if func.params.is_empty() {
-                    // Async function with no parameters
-                    quote! {
-                        Request::#variant_name => {
-                            // Create a mutable reference that will be promoted to a static lifetime
-                            // This is safe in WASM since we have a single-threaded environment
-                            // and the state outlives all async operations
-                            let state_ptr: *mut #self_ty = &mut state;
-                            hyperware_app_common::hyper! {
-                                // Inside the async block, we'll use the pointer to safely access state
-                                let result = unsafe { (*state_ptr).#fn_name().await };
-                                #response_handling
-                            }
-                        }
-                    }
-                } else if func.params.len() == 1 {
-                    // Async function with a single parameter
-                    quote! {
-                        Request::#variant_name(param) => {
-                            let param_captured = param;  // Capture param before moving into async block
-                            // Create a mutable reference that will be promoted to a static lifetime
-                            // This is safe in WASM since we have a single-threaded environment
-                            // and the state outlives all async operations
-                            let state_ptr: *mut #self_ty = &mut state;
-                            hyperware_app_common::hyper! {
-                                // Inside the async block, we'll use the pointer to safely access state
-                                let result = unsafe { (*state_ptr).#fn_name(param_captured).await };
-                                #response_handling
-                            }
-                        }
-                    }
-                } else {
-                    // Async function with multiple parameters
-                    let param_count = func.params.len();
-                    let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
-                    let capture_statements = (0..param_count).map(|i| {
-                        let param = format_ident!("param{}", i);
-                        let captured = format_ident!("param{}_captured", i);
-                        quote! { let #captured = #param; }
-                    });
-                    let captured_names = (0..param_count).map(|i| format_ident!("param{}_captured", i));
-                    
-                    quote! {
-                        Request::#variant_name(#(#param_names),*) => {
-                            // Capture all parameters before moving into async block
-                            #(#capture_statements)*
-                            // Create a mutable reference that will be promoted to a static lifetime
-                            // This is safe in WASM since we have a single-threaded environment
-                            // and the state outlives all async operations
-                            let state_ptr: *mut #self_ty = &mut state;
-                            hyperware_app_common::hyper! {
-                                // Inside the async block, we'll use the pointer to safely access state
-                                let result = unsafe { (*state_ptr).#fn_name(#(#captured_names),*).await };
-                                #response_handling
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Sync function handling
-                if func.params.is_empty() {
-                    quote! {
-                        Request::#variant_name => {
-                            let result = state.#fn_name();
-                            #response_handling
-                        }
-                    }
-                } else if func.params.len() == 1 {
-                    quote! {
-                        Request::#variant_name(param) => {
-                            let result = state.#fn_name(param);
-                            #response_handling
-                        }
-                    }
-                } else {
-                    let param_count = func.params.len();
-                    let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
-                    let param_names2 = param_names.clone();
-                    
-                    quote! {
-                        Request::#variant_name(#(#param_names),*) => {
-                            let result = state.#fn_name(#(#param_names2),*);
-                            #response_handling
-                        }
-                    }
-                }
-            }
-        });
-    
+        .map(|func| generate_handler_dispatch_arm(func, self_ty, handler_type, type_name));
+
     // Add an explicit unreachable for other variants
     let unreachable_arm = quote! {
         _ => unreachable!(concat!("Non-", #type_name, " request variant received in ", #type_name, " handler"))
     };
-    
+
     quote! {
         match request {
             #(#dispatch_arms)*
@@ -635,103 +648,468 @@ fn generate_request_match_arms(
     }
 }
 
-/// Generate local handler match arms for request handling
-fn generate_local_request_match_arms(
-    local_handlers: &[&FunctionMetadata],
+/// Generate a match arm for a specific handler
+fn generate_handler_dispatch_arm(
+    func: &FunctionMetadata,
     self_ty: &Box<syn::Type>,
+    handler_type: HandlerType,
+    type_name: &str,
 ) -> proc_macro2::TokenStream {
-    generate_request_match_arms(local_handlers, self_ty, HandlerType::Local)
-}
+    let fn_name = &func.name;
+    let variant_name = format_ident!("{}", &func.variant_name);
 
-/// Generate remote handler match arms for request handling
-fn generate_remote_request_match_arms(
-    remote_handlers: &[&FunctionMetadata],
-    self_ty: &Box<syn::Type>,
-) -> proc_macro2::TokenStream {
-    generate_request_match_arms(remote_handlers, self_ty, HandlerType::Remote)
-}
+    // Get the appropriate response handling code
+    let response_handling =
+        generate_response_handling(func, &variant_name, handler_type, type_name);
 
-/// Generate HTTP handler match arms for request handling
-fn generate_http_request_match_arms(
-    http_handlers: &[&FunctionMetadata],
-    self_ty: &Box<syn::Type>,
-) -> proc_macro2::TokenStream {
-    generate_request_match_arms(http_handlers, self_ty, HandlerType::Http)
-}
-
-/// Generate a debug string representation of a handler dispatch code
-fn generate_debug_handler_string(
-    handlers: &[&FunctionMetadata],
-    handler_type: &str,
-) -> String {
-    if handlers.is_empty() {
-        return format!("// No {} handlers defined", handler_type).to_string();
+    if func.is_async {
+        generate_async_handler_arm(func, self_ty, fn_name, &variant_name, response_handling)
+    } else {
+        generate_sync_handler_arm(func, fn_name, &variant_name, response_handling)
     }
+}
 
-    let debug_cases = handlers
-        .iter()
-        .map(|func| {
-            let fn_name = &func.name;
-            let variant_name = &func.variant_name;
-            let async_keyword = if func.is_async { "async " } else { "" };
-            
-            if func.params.is_empty() {
-                format!("    Request::{} => {{ /* Call state.{}{}() */ }}", 
-                    variant_name, async_keyword, fn_name)
-            } else if func.params.len() == 1 {
-                format!("    Request::{}(param) => {{ /* Call state.{}{}(param) */ }}", 
-                    variant_name, async_keyword, fn_name)
-            } else {
-                let param_count = func.params.len();
-                let param_names: Vec<_> = (0..param_count).map(|i| format!("param{}", i)).collect();
-                let params_list = param_names.join(", ");
-                
-                format!("    Request::{}({}) => {{ /* Call state.{}{}({}) */ }}", 
-                    variant_name, params_list, async_keyword, fn_name, params_list)
+/// Generate response handling code based on handler type
+fn generate_response_handling(
+    func: &FunctionMetadata,
+    variant_name: &syn::Ident,
+    handler_type: HandlerType,
+    type_name: &str,
+) -> proc_macro2::TokenStream {
+    match handler_type {
+        HandlerType::Local | HandlerType::Remote => {
+            quote! {
+                let response = Response::#variant_name(result);
+                let resp = hyperware_process_lib::Response::new()
+                    .body(serde_json::to_vec(&response).unwrap());
+                kiprintln!("Sending {} response: {:?}", #type_name, response);
+                resp.send().unwrap();
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-        
-    format!("match request {{\n{}\n}}", debug_cases)
-}
-
-/// Generate a debug string representation of the local handler dispatch code
-fn generate_debug_local_handler_string(
-    local_handlers: &[&FunctionMetadata],
-) -> String {
-    generate_debug_handler_string(local_handlers, "local")
-}
-
-/// Generate a debug string representation of the remote handler dispatch code
-fn generate_debug_remote_handler_string(
-    remote_handlers: &[&FunctionMetadata],
-) -> String {
-    generate_debug_handler_string(remote_handlers, "remote")
-}
-
-/// Generate a debug string representation of the HTTP handler dispatch code
-fn generate_debug_http_handler_string(
-    http_handlers: &[&FunctionMetadata],
-) -> String {
-    generate_debug_handler_string(http_handlers, "HTTP")
-}
-
-/// Remove our custom attributes from the implementation block
-fn clean_impl_block(impl_block: &ItemImpl) -> ItemImpl {
-    let mut cleaned_impl_block = impl_block.clone();
-    for item in &mut cleaned_impl_block.items {
-        if let syn::ImplItem::Fn(method) = item {
-            method.attrs.retain(|attr| {
-                !attr.path().is_ident("init")
-                    && !attr.path().is_ident("http")
-                    && !attr.path().is_ident("local")
-                    && !attr.path().is_ident("remote")
-                    && !attr.path().is_ident("ws")
-            });
+        }
+        HandlerType::Http => {
+            quote! {
+                let response = Response::#variant_name(result);
+                let response_bytes = serde_json::to_vec(&response).unwrap();
+                kiprintln!("Sending HTTP response: {:?}", response);
+                hyperware_process_lib::http::server::send_response(
+                    hyperware_process_lib::http::StatusCode::OK,
+                    None,
+                    response_bytes
+                );
+            }
         }
     }
-    cleaned_impl_block
+}
+
+/// Generate a match arm for an async handler
+fn generate_async_handler_arm(
+    func: &FunctionMetadata,
+    self_ty: &Box<syn::Type>,
+    fn_name: &syn::Ident,
+    variant_name: &syn::Ident,
+    response_handling: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    if func.params.is_empty() {
+        // Async function with no parameters
+        quote! {
+            Request::#variant_name => {
+                // Create a raw pointer to state for use in the async block
+                let state_ptr: *mut #self_ty = state;
+                hyperware_app_common::hyper! {
+                    // Inside the async block, use the pointer to access state
+                    let result = unsafe { (*state_ptr).#fn_name().await };
+                    #response_handling
+                }
+            }
+        }
+    } else if func.params.len() == 1 {
+        // Async function with a single parameter
+        quote! {
+            Request::#variant_name(param) => {
+                let param_captured = param;  // Capture param before moving into async block
+                // Create a raw pointer to state for use in the async block
+                let state_ptr: *mut #self_ty = state;
+                hyperware_app_common::hyper! {
+                    // Inside the async block, use the pointer to access state
+                    let result = unsafe { (*state_ptr).#fn_name(param_captured).await };
+                    #response_handling
+                }
+            }
+        }
+    } else {
+        // Async function with multiple parameters
+        let param_count = func.params.len();
+        let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
+        let capture_statements = (0..param_count).map(|i| {
+            let param = format_ident!("param{}", i);
+            let captured = format_ident!("param{}_captured", i);
+            quote! { let #captured = #param; }
+        });
+        let captured_names = (0..param_count).map(|i| format_ident!("param{}_captured", i));
+
+        quote! {
+            Request::#variant_name(#(#param_names),*) => {
+                // Capture all parameters before moving into async block
+                #(#capture_statements)*
+                // Create a raw pointer to state for use in the async block
+                let state_ptr: *mut #self_ty = state;
+                hyperware_app_common::hyper! {
+                    // Inside the async block, use the pointer to access state
+                    let result = unsafe { (*state_ptr).#fn_name(#(#captured_names),*).await };
+                    #response_handling
+                }
+            }
+        }
+    }
+}
+
+/// Generate a match arm for a sync handler
+fn generate_sync_handler_arm(
+    func: &FunctionMetadata,
+    fn_name: &syn::Ident,
+    variant_name: &syn::Ident,
+    response_handling: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    if func.params.is_empty() {
+        quote! {
+            Request::#variant_name => {
+                let result = unsafe { (*state).#fn_name() };
+                #response_handling
+            }
+        }
+    } else if func.params.len() == 1 {
+        quote! {
+            Request::#variant_name(param) => {
+                let result = unsafe { (*state).#fn_name(param) };
+                #response_handling
+            }
+        }
+    } else {
+        let param_count = func.params.len();
+        let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
+        let param_names2 = param_names.clone();
+
+        quote! {
+            Request::#variant_name(#(#param_names),*) => {
+                let result = unsafe { (*state).#fn_name(#(#param_names2),*) };
+                #response_handling
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+// Component Generation Functions
+//------------------------------------------------------------------------------
+
+/// Convert optional init method to token stream for identifier
+fn init_method_opt_to_token(init_method: &Option<syn::Ident>) -> proc_macro2::TokenStream {
+    if let Some(method_name) = init_method {
+        quote! { Some(stringify!(#method_name)) }
+    } else {
+        quote! { None::<&str> }
+    }
+}
+
+/// Convert optional init method to token stream for method call
+fn init_method_opt_to_call(init_method: &Option<syn::Ident>) -> proc_macro2::TokenStream {
+    if let Some(method_name) = init_method {
+        quote! { state.#method_name(); }
+    } else {
+        quote! {}
+    }
+}
+
+/// Generate handler functions for message types
+fn generate_message_handlers(
+    self_ty: &Box<syn::Type>,
+    handler_arms: &HandlerDispatch,
+) -> proc_macro2::TokenStream {
+    let http_request_match_arms = &handler_arms.http;
+    let local_request_match_arms = &handler_arms.local;
+    let remote_request_match_arms = &handler_arms.remote;
+
+    quote! {
+        /// Handle messages from the HTTP server
+        fn handle_http_server_message(state: *mut #self_ty, message: hyperware_process_lib::Message) {
+            // Parse HTTP server request
+            match serde_json::from_slice::<hyperware_process_lib::http::server::HttpServerRequest>(message.body()) {
+                Ok(http_server_request) => {
+                    match http_server_request {
+                        hyperware_process_lib::http::server::HttpServerRequest::Http(_) => {
+                            // Get the blob containing the actual request
+                            let Some(blob) = message.blob() else {
+                                hyperware_process_lib::logging::warn!("Failed to get blob for HTTP, sending BAD_REQUEST");
+                                hyperware_process_lib::http::server::send_response(
+                                    hyperware_process_lib::http::StatusCode::BAD_REQUEST,
+                                    None,
+                                    vec![]
+                                );
+                                return;
+                            };
+
+                            // Process HTTP request
+                            match serde_json::from_slice::<serde_json::Value>(blob.bytes()) {
+                                Ok(req_value) => {
+                                    match serde_json::from_value::<Request>(req_value.clone()) {
+                                        Ok(request) => {
+                                            // Handle the HTTP request
+                                            unsafe {
+                                                #http_request_match_arms
+
+                                                // Save state if needed
+                                                hyperware_app_common::maybe_save_state(&mut *state);
+                                            }
+                                        },
+                                        Err(e) => {
+                                            hyperware_process_lib::logging::warn!("Failed to deserialize HTTP request into Request enum: {}", e);
+                                            hyperware_process_lib::http::server::send_response(
+                                                hyperware_process_lib::http::StatusCode::BAD_REQUEST,
+                                                None,
+                                                format!("Invalid request format: {}", e).into_bytes()
+                                            );
+                                        }
+                                    }
+                                },
+                                Err(e) => {
+                                    hyperware_process_lib::logging::warn!("Failed to parse HTTP request as JSON: {}", e);
+                                    hyperware_process_lib::http::server::send_response(
+                                        hyperware_process_lib::http::StatusCode::BAD_REQUEST,
+                                        None,
+                                        format!("Invalid JSON: {}", e).into_bytes()
+                                    );
+                                }
+                            }
+                        },
+                        hyperware_process_lib::http::server::HttpServerRequest::WebSocketPush { channel_id, message_type } => {
+                            // TODO: Handle WebSocketPush
+                            hyperware_process_lib::logging::info!("WebSocketPush not yet implemented");
+                        },
+                        hyperware_process_lib::http::server::HttpServerRequest::WebSocketOpen { path, channel_id } => {
+                            let path = hyperware_app_common::get_path().unwrap();
+                            hyperware_app_common::get_server().unwrap().handle_websocket_open(&path, channel_id);
+
+                        },
+                        hyperware_process_lib::http::server::HttpServerRequest::WebSocketClose(channel_id) => {
+                            hyperware_app_common::get_server().unwrap().handle_websocket_close(channel_id);
+                        }
+                    }
+                },
+                Err(e) => {
+                    hyperware_process_lib::logging::warn!("Failed to parse HTTP server request: {}", e);
+                }
+            }
+        }
+
+        /// Handle local messages
+        fn handle_local_message(state: *mut #self_ty, message: hyperware_process_lib::Message) {
+            match serde_json::from_slice::<serde_json::Value>(message.body()) {
+                Ok(req_value) => {
+                    // Process the local request based on our handlers
+                    match serde_json::from_value::<Request>(req_value.clone()) {
+                        Ok(request) => {
+                            unsafe {
+                                // Match on the request variant and call the appropriate handler
+                                #local_request_match_arms
+
+                                // Save state if needed
+                                hyperware_app_common::maybe_save_state(&mut *state);
+                            }
+                        },
+                        Err(e) => {
+                            hyperware_process_lib::logging::warn!("Failed to deserialize local request into Request enum: {}", e);
+                        }
+                    }
+                },
+                Err(e) => {
+                    hyperware_process_lib::logging::warn!("Failed to parse message body as JSON: {}", e);
+                }
+            }
+        }
+
+        /// Handle remote messages
+        fn handle_remote_message(state: *mut #self_ty, message: hyperware_process_lib::Message) {
+            match serde_json::from_slice::<serde_json::Value>(message.body()) {
+                Ok(req_value) => {
+                    // Process the remote request based on our handlers
+                    match serde_json::from_value::<Request>(req_value.clone()) {
+                        Ok(request) => {
+                            unsafe {
+                                // Match on the request variant and call the appropriate handler
+                                #remote_request_match_arms
+
+                                // Save state if needed
+                                hyperware_app_common::maybe_save_state(&mut *state);
+                            }
+                        },
+                        Err(e) => {
+                            hyperware_process_lib::logging::warn!("Failed to deserialize remote request into Request enum: {}", e);
+                        }
+                    }
+                },
+                Err(e) => {
+                    hyperware_process_lib::logging::warn!("Failed to parse message body as JSON: {}", e);
+                }
+            }
+        }
+    }
+}
+
+/// Generate the full component implementation
+fn generate_component_impl(
+    args: &HyperProcessArgs,
+    self_ty: &Box<syn::Type>,
+    cleaned_impl_block: &ItemImpl,
+    request_enum: &proc_macro2::TokenStream,
+    response_enum: &proc_macro2::TokenStream,
+    debug_request_enum: &str,
+    debug_response_enum: &str,
+    init_method_details: &InitMethodDetails,
+    handler_arms: &HandlerDispatch,
+    debug_handler_dispatches: &DebugHandlerDispatch,
+) -> proc_macro2::TokenStream {
+    // Extract values from args for use in the quote macro
+    let name = &args.name;
+    let endpoints = &args.endpoints;
+    let save_config = &args.save_config;
+    let wit_world = &args.wit_world;
+
+    let icon = match &args.icon {
+        Some(icon_str) => quote! { Some(#icon_str.to_string()) },
+        None => quote! { None },
+    };
+
+    let widget = match &args.widget {
+        Some(widget_str) => quote! { Some(#widget_str.to_string()) },
+        None => quote! { None },
+    };
+
+    let ui = match &args.ui {
+        Some(ui_expr) => quote! { Some(#ui_expr) },
+        None => quote! { None },
+    };
+
+    let init_method_ident = &init_method_details.identifier;
+    let init_method_call = &init_method_details.call;
+    let debug_local_handler_dispatch = &debug_handler_dispatches.local;
+    let debug_remote_handler_dispatch = &debug_handler_dispatches.remote;
+    let debug_http_handler_dispatch = &debug_handler_dispatches.http;
+
+    // Generate message handler functions
+    let message_handlers = generate_message_handlers(self_ty, handler_arms);
+
+    quote! {
+        wit_bindgen::generate!({
+            path: "target/wit",
+            world: #wit_world,
+            generate_unused_types: true,
+            additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
+        });
+
+        use hyperware_process_lib::http::server::HttpBindingConfig;
+        use hyperware_app_common::Binding;
+
+        #cleaned_impl_block
+
+        // Add our generated request/response enums
+        #request_enum
+        #response_enum
+
+        #message_handlers
+
+        struct Component;
+        impl Guest for Component {
+            fn init(_our: String) {
+                // Debug: Print the generated enum definitions in a clean format
+                kiprintln!("============= GENERATED REQUEST ENUM =============");
+                kiprintln!("enum Request {{");
+                kiprintln!("{}", #debug_request_enum);
+                kiprintln!("}}");
+
+                kiprintln!("============= GENERATED RESPONSE ENUM ============");
+                kiprintln!("enum Response {{");
+                kiprintln!("{}", #debug_response_enum);
+                kiprintln!("}}");
+
+                // Debug: Print the handler dispatch code
+                kiprintln!("============= LOCAL HANDLER DISPATCH =============");
+                kiprintln!("// Pseudo-code representation of generated handler:");
+                kiprintln!("fn handle_local_request(state: &mut State, request: Request) {{");
+                kiprintln!("{}", #debug_local_handler_dispatch);
+                kiprintln!("}}");
+
+                kiprintln!("============= REMOTE HANDLER DISPATCH ============");
+                kiprintln!("// Pseudo-code representation of generated handler:");
+                kiprintln!("fn handle_remote_request(state: &mut State, message: &Message, request: Request) {{");
+                kiprintln!("{}", #debug_remote_handler_dispatch);
+                kiprintln!("}}");
+
+                kiprintln!("============= HTTP HANDLER DISPATCH ==============");
+                kiprintln!("// Pseudo-code representation of generated handler:");
+                kiprintln!("fn handle_http_request(state: &mut State, request: Request) {{");
+                kiprintln!("{}", #debug_http_handler_dispatch);
+                kiprintln!("}}");
+
+                kiprintln!("Starting application...");
+
+                // Initialize our state
+                let mut state = hyperware_app_common::initialize_state::<#self_ty>();
+
+                // Set up necessary components
+                let app_name = #name;
+                let app_icon = #icon;
+                let app_widget = #widget;
+                let ui_config = #ui;
+                let endpoints = #endpoints;
+
+                // Setup UI if needed
+                if app_icon.is_some() && app_widget.is_some() {
+                    hyperware_process_lib::homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
+                }
+
+                // Initialize logging
+                hyperware_process_lib::logging::init_logging(
+                    hyperware_process_lib::logging::Level::DEBUG,
+                    hyperware_process_lib::logging::Level::INFO,
+                    None, Some((0, 0, 1, 1)), None
+                ).unwrap();
+
+                // Setup server with endpoints
+                let mut server = hyperware_app_common::setup_server(ui_config.as_ref(), &endpoints);
+
+                // Initialize app state
+                if #init_method_ident.is_some() {
+                    #init_method_call
+                }
+
+                // Main event loop
+                loop {
+                    hyperware_app_common::APP_CONTEXT.with(|ctx| {
+                        ctx.borrow_mut().executor.poll_all_tasks();
+                    });
+
+                    match hyperware_process_lib::await_message() {
+                        Ok(message) => {
+                            // Check if this is an HTTP message from the HTTP server
+                            if message.is_local() && message.source().process == "http-server:distro:sys" {
+                                handle_http_server_message(&mut state, message);
+                            } else if message.is_local() {
+                                handle_local_message(&mut state, message);
+                            } else {
+                                handle_remote_message(&mut state, message);
+                            }
+                        },
+                        Err(e) => {
+                            // We'll improve error handling later
+                            kiprintln!("Failed to await message: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        export!(Component);
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -755,294 +1133,55 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     let self_ty = &impl_block.self_ty;
 
     // Analyze the methods in the implementation block
-    let (init_method, ws_method, function_metadata) =
-        match analyze_methods(&impl_block) {
-            Ok(methods) => methods,
-            Err(e) => return e.to_compile_error().into(),
-        };
+    let (init_method, ws_method, function_metadata) = match analyze_methods(&impl_block) {
+        Ok(methods) => methods,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
-    // Split functions by handler type
-    let local_handlers: Vec<_> = function_metadata.iter()
-        .filter(|f| f.is_local)
-        .collect();
-    
-    let remote_handlers: Vec<_> = function_metadata.iter()
-        .filter(|f| f.is_remote)
-        .collect();
-    
-    let http_handlers: Vec<_> = function_metadata.iter()
-        .filter(|f| f.is_http)
-        .collect();
+    // Filter functions by handler type
+    let handlers = HandlerGroups::from_function_metadata(&function_metadata);
 
     // Generate Request and Response enums
     let (request_enum, response_enum) = generate_request_response_enums(&function_metadata);
-    
+
     // Generate debug strings
     let (debug_request_enum, debug_response_enum) = generate_debug_enum_strings(&function_metadata);
-    
+
     // Generate handler match arms
-    let local_request_match_arms = generate_local_request_match_arms(&local_handlers, self_ty);
-    let remote_request_match_arms = generate_remote_request_match_arms(&remote_handlers, self_ty);
-    let http_request_match_arms = generate_http_request_match_arms(&http_handlers, self_ty);
-    
+    let handler_arms = HandlerDispatch {
+        local: generate_handler_dispatch(&handlers.local, self_ty, HandlerType::Local),
+        remote: generate_handler_dispatch(&handlers.remote, self_ty, HandlerType::Remote),
+        http: generate_handler_dispatch(&handlers.http, self_ty, HandlerType::Http),
+    };
+
     // Generate debug handler strings
-    let debug_local_handler_dispatch = generate_debug_local_handler_string(&local_handlers);
-    let debug_remote_handler_dispatch = generate_debug_remote_handler_string(&remote_handlers);
-    let debug_http_handler_dispatch = generate_debug_http_handler_string(&http_handlers);
+    let debug_handler_dispatches = DebugHandlerDispatch {
+        local: generate_debug_handler_string(&handlers.local, "local"),
+        remote: generate_debug_handler_string(&handlers.remote, "remote"),
+        http: generate_debug_handler_string(&handlers.http, "HTTP"),
+    };
 
     // Clean the implementation block
     let cleaned_impl_block = clean_impl_block(&impl_block);
 
-    // Export the init method identifier for direct use in the component implementation
-    let init_method_ident = if let Some(method_name) = &init_method {
-        quote! { Some(stringify!(#method_name)) }
-    } else {
-        quote! { None::<&str> }
-    };
-
-    // For direct method call, we need the actual method identifier
-    let init_method_call = if let Some(method_name) = &init_method {
-        quote! { state.#method_name(); }
-    } else {
-        quote! {}
-    };
-
-    // Extract values from args for use in the quote macro
-    let name = &args.name;
-    let endpoints = &args.endpoints;
-    let save_config = &args.save_config;
-    let wit_world = &args.wit_world;
-    
-    let icon = match &args.icon {
-        Some(icon_str) => quote! { Some(#icon_str.to_string()) },
-        None => quote! { None }
-    };
-    
-    let widget = match &args.widget {
-        Some(widget_str) => quote! { Some(#widget_str.to_string()) },
-        None => quote! { None }
-    };
-    
-    let ui = match &args.ui {
-        Some(ui_expr) => quote! { Some(#ui_expr) },
-        None => quote! { None }
+    // Prepare init method details for code generation
+    let init_method_details = InitMethodDetails {
+        identifier: init_method_opt_to_token(&init_method),
+        call: init_method_opt_to_call(&init_method),
     };
 
     // Generate the final output
-    let output = quote! {
-        wit_bindgen::generate!({
-            path: "target/wit",
-            world: #wit_world,
-            generate_unused_types: true,
-            additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
-        });
-
-        use hyperware_process_lib::http::server::HttpBindingConfig;
-        use hyperware_app_common::Binding;
-
-        #cleaned_impl_block
-
-        // Add our generated request/response enums
-        #request_enum
-        #response_enum
-
-        struct Component;
-        impl Guest for Component {
-            fn init(_our: String) {
-                // Debug: Print the generated enum definitions in a clean format
-                kiprintln!("============= GENERATED REQUEST ENUM =============");
-                kiprintln!("enum Request {{");
-                kiprintln!("{}", #debug_request_enum);
-                kiprintln!("}}");
-                
-                kiprintln!("============= GENERATED RESPONSE ENUM ============");
-                kiprintln!("enum Response {{");
-                kiprintln!("{}", #debug_response_enum);
-                kiprintln!("}}");
-                
-                // Debug: Print the handler dispatch code
-                kiprintln!("============= LOCAL HANDLER DISPATCH =============");
-                kiprintln!("// Pseudo-code representation of generated handler:");
-                kiprintln!("fn handle_local_request(state: &mut State, request: Request) {{");
-                kiprintln!("{}", #debug_local_handler_dispatch);
-                kiprintln!("}}");
-                
-                kiprintln!("============= REMOTE HANDLER DISPATCH ============");
-                kiprintln!("// Pseudo-code representation of generated handler:");
-                kiprintln!("fn handle_remote_request(state: &mut State, message: &Message, request: Request) {{");
-                kiprintln!("{}", #debug_remote_handler_dispatch);
-                kiprintln!("}}");
-                
-                kiprintln!("============= HTTP HANDLER DISPATCH ==============");
-                kiprintln!("// Pseudo-code representation of generated handler:");
-                kiprintln!("fn handle_http_request(state: &mut State, request: Request) {{");
-                kiprintln!("{}", #debug_http_handler_dispatch);
-                kiprintln!("}}");
-                
-                kiprintln!("Starting application...");
-                
-                // Initialize our state
-                let mut state = hyperware_app_common::initialize_state::<#self_ty>();
-                
-                // Set up necessary components
-                let app_name = #name;
-                let app_icon = #icon;
-                let app_widget = #widget;
-                let ui_config = #ui;
-                let endpoints = #endpoints;
-                
-                // Setup UI if needed
-                if app_icon.is_some() && app_widget.is_some() {
-                    hyperware_process_lib::homepage::add_to_homepage(app_name, app_icon, Some("/"), app_widget);
-                }
-                
-                // Initialize logging
-                hyperware_process_lib::logging::init_logging(
-                    hyperware_process_lib::logging::Level::DEBUG,
-                    hyperware_process_lib::logging::Level::INFO,
-                    None, Some((0, 0, 1, 1)), None
-                ).unwrap();
-                
-                // Setup server with endpoints
-                let mut server = hyperware_app_common::setup_server(ui_config.as_ref(), &endpoints);
-                
-                // Initialize app state
-                if #init_method_ident.is_some() {
-                    #init_method_call
-                }
-                
-                // Main event loop
-                loop {
-                    hyperware_app_common::APP_CONTEXT.with(|ctx| {
-                        ctx.borrow_mut().executor.poll_all_tasks();
-                    });
-                    
-                    match hyperware_process_lib::await_message() {
-                        Ok(message) => {
-                            // Check if this is an HTTP message from the HTTP server
-                            if message.is_local() && message.source().process == "http-server:distro:sys" {
-                                // Parse HTTP server request
-                                match serde_json::from_slice::<hyperware_process_lib::http::server::HttpServerRequest>(message.body()) {
-                                    Ok(http_server_request) => {
-                                        match http_server_request {
-                                            hyperware_process_lib::http::server::HttpServerRequest::Http(_) => {
-                                                // Get the blob containing the actual request
-                                                let Some(blob) = message.blob() else {
-                                                    hyperware_process_lib::logging::warn!("Failed to get blob for HTTP, sending BAD_REQUEST");
-                                                    hyperware_process_lib::http::server::send_response(
-                                                        hyperware_process_lib::http::StatusCode::BAD_REQUEST, 
-                                                        None, 
-                                                        vec![]
-                                                    );
-                                                    return;
-                                                };
-                                                
-                                                // Process HTTP request
-                                                match serde_json::from_slice::<serde_json::Value>(blob.bytes()) {
-                                                    Ok(req_value) => {
-                                                        match serde_json::from_value::<Request>(req_value.clone()) {
-                                                            Ok(request) => {
-                                                                // Handle the HTTP request
-                                                                #http_request_match_arms
-                                                                
-                                                                // Save state if needed
-                                                                hyperware_app_common::maybe_save_state(&state);
-                                                            },
-                                                            Err(e) => {
-                                                                hyperware_process_lib::logging::warn!("Failed to deserialize HTTP request into Request enum: {}", e);
-                                                                hyperware_process_lib::http::server::send_response(
-                                                                    hyperware_process_lib::http::StatusCode::BAD_REQUEST, 
-                                                                    None, 
-                                                                    format!("Invalid request format: {}", e).into_bytes()
-                                                                );
-                                                            }
-                                                        }
-                                                    },
-                                                    Err(e) => {
-                                                        hyperware_process_lib::logging::warn!("Failed to parse HTTP request as JSON: {}", e);
-                                                        hyperware_process_lib::http::server::send_response(
-                                                            hyperware_process_lib::http::StatusCode::BAD_REQUEST, 
-                                                            None, 
-                                                            format!("Invalid JSON: {}", e).into_bytes()
-                                                        );
-                                                    }
-                                                }
-                                            },
-                                            hyperware_process_lib::http::server::HttpServerRequest::WebSocketPush { channel_id, message_type } => {
-                                                // TODO: Handle WebSocketPush
-                                                hyperware_process_lib::logging::info!("WebSocketPush not yet implemented");
-                                            },
-                                            hyperware_process_lib::http::server::HttpServerRequest::WebSocketOpen { path, channel_id } => {
-                                                // TODO: Handle WebSocketOpen
-                                                hyperware_process_lib::logging::info!("WebSocketOpen not yet implemented");
-                                            },
-                                            hyperware_process_lib::http::server::HttpServerRequest::WebSocketClose(channel_id) => {
-                                                // TODO: Handle WebSocketClose
-                                                hyperware_process_lib::logging::info!("WebSocketClose not yet implemented");
-                                            }
-                                        }
-                                    },
-                                    Err(e) => {
-                                        hyperware_process_lib::logging::warn!("Failed to parse HTTP server request: {}", e);
-                                    }
-                                }
-                            } else if message.is_local() {
-                                // Regular local message handling
-                                match serde_json::from_slice::<serde_json::Value>(message.body()) {
-                                    Ok(req_value) => {
-                                        // Process the local request based on our handlers
-                                        match serde_json::from_value::<Request>(req_value.clone()) {
-                                            Ok(request) => {
-                                                // Match on the request variant and call the appropriate handler
-                                                #local_request_match_arms
-                                                
-                                                // Save state if needed
-                                                hyperware_app_common::maybe_save_state(&state);
-                                            },
-                                            Err(e) => {
-                                                hyperware_process_lib::logging::warn!("Failed to deserialize local request into Request enum: {}", e);
-                                            }
-                                        }
-                                    },
-                                    Err(e) => {
-                                        hyperware_process_lib::logging::warn!("Failed to parse message body as JSON: {}", e);
-                                    }
-                                }
-                            } else {
-                                // Remote message handling
-                                match serde_json::from_slice::<serde_json::Value>(message.body()) {
-                                    Ok(req_value) => {
-                                        // Process the remote request based on our handlers
-                                        match serde_json::from_value::<Request>(req_value.clone()) {
-                                            Ok(request) => {
-                                                // Match on the request variant and call the appropriate handler
-                                                #remote_request_match_arms
-                                                
-                                                // Save state if needed
-                                                hyperware_app_common::maybe_save_state(&state);
-                                            },
-                                            Err(e) => {
-                                                hyperware_process_lib::logging::warn!("Failed to deserialize remote request into Request enum: {}", e);
-                                            }
-                                        }
-                                    },
-                                    Err(e) => {
-                                        hyperware_process_lib::logging::warn!("Failed to parse message body as JSON: {}", e);
-                                    }
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            // We'll improve error handling later
-                            kiprintln!("Failed to await message: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-
-        export!(Component);
-    };
-
-    output.into()
+    generate_component_impl(
+        &args,
+        self_ty,
+        &cleaned_impl_block,
+        &request_enum,
+        &response_enum,
+        &debug_request_enum,
+        &debug_response_enum,
+        &init_method_details,
+        &handler_arms,
+        &debug_handler_dispatches,
+    )
+    .into()
 }
