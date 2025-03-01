@@ -1209,13 +1209,19 @@ fn generate_component_impl(
 
                     match hyperware_process_lib::await_message() {
                         Ok(message) => {
-                            // Check if this is an HTTP message from the HTTP server
-                            if message.is_local() && message.source().process == "http-server:distro:sys" {
-                                handle_http_server_message(&mut state, message);
-                            } else if message.is_local() {
-                                handle_local_message(&mut state, message);
-                            } else {
-                                handle_remote_message(&mut state, message);
+                            match message {
+                                hyperware_process_lib::Message::Response {body, context, ..} => {
+
+                                }
+                                hyperware_process_lib::Message::Request { .. } => {
+                                    if message.is_local() && message.source().process == "http-server:distro:sys" {
+                                        handle_http_server_message(&mut state, message);
+                                    } else if message.is_local() {
+                                        handle_local_message(&mut state, message);
+                                    } else {
+                                        handle_remote_message(&mut state, message);
+                                    }
+                                }
                             }
                         },
                         Err(error) => {
