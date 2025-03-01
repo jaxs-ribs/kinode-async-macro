@@ -1211,7 +1211,7 @@ fn generate_component_impl(
                         Ok(message) => {
                             match message {
                                 hyperware_process_lib::Message::Response {body, context, ..} => {
-
+                                    // TODO: We need to update the callback handlers to make async work. 
                                 }
                                 hyperware_process_lib::Message::Request { .. } => {
                                     if message.is_local() && message.source().process == "http-server:distro:sys" {
@@ -1225,6 +1225,7 @@ fn generate_component_impl(
                             }
                         },
                         Err(error) => {
+                            // TODO: We need to update the callback handlers to make async work. 
                             let kind = &error.kind;
                             let target = &error.target;
                             let body = String::from_utf8(error.message.body().to_vec())
