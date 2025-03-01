@@ -1,10 +1,4 @@
-#![allow(warnings)] // TODO: Zena: Remove this and fix warnings
-
-//! # HyperProcess Procedural Macro
-//!
-//! This macro generates boilerplate code for HyperProcess applications,
-//! analyzing method attributes to create appropriate request/response handling.
-
+#![allow(warnings)]
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
@@ -747,7 +741,7 @@ fn generate_handler_dispatch_arm(
 
 /// Generate response handling code based on handler type
 fn generate_response_handling(
-    func: &FunctionMetadata,
+    _func: &FunctionMetadata,
     variant_name: &syn::Ident,
     handler_type: HandlerType,
     type_name: &str,
@@ -1085,7 +1079,7 @@ fn generate_component_impl(
     // Extract values from args for use in the quote macro
     let name = &args.name;
     let endpoints = &args.endpoints;
-    let save_config = &args.save_config;
+    let _save_config = &args.save_config;
     let wit_world = &args.wit_world;
 
     let icon = match &args.icon {
