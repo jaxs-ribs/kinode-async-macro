@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "hyperdriver",
+    "receiver-a",
+    "receiver-b",
     "lib/shared",
 ]
 

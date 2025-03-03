@@ -2479,6 +2479,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "receiver-a"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "futures-util",
+ "hyperprocess_macro",
+ "hyperware_app_common",
+ "hyperware_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "shared",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
+name = "receiver-b"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "futures-util",
+ "hyperprocess_macro",
+ "hyperware_app_common",
+ "hyperware_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "shared",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -34,7 +34,7 @@ impl State for AsyncRequesterState {
 )]
 impl AsyncRequesterState {
     #[init]
-    fn initialize(&mut self) {
+    async fn initialize(&mut self) {
         kiprintln!("Initializing Async Requester");
         self.request_count = 0;
         kiprintln!("The counter is now {}", self.request_count);

@@ -18,5 +18,45 @@
             "homepage:homepage:sys"
         ],
         "public": true
+    }, 
+    {
+        "process_name": "receiver-a",
+        "process_wasm_path": "/receiver-a.wasm",
+        "on_exit": "None",
+        "request_networking": true,
+        "request_capabilities": [
+            "http-server:distro:sys",
+            "http-client:distro:sys",
+            "vfs:distro:sys",
+            "homepage:homepage:sys"
+
+        ],
+        "grant_capabilities": [
+            "http-server:distro:sys",
+            "http-client:distro:sys",
+            "vfs:distro:sys",
+            "homepage:homepage:sys"
+        ],
+        "public": true
+    }, 
+    {
+        "process_name": "receiver-b",
+        "process_wasm_path": "/receiver-b.wasm",
+        "on_exit": "None",
+        "request_networking": true,
+        "request_capabilities": [
+            "http-server:distro:sys",
+            "http-client:distro:sys",
+            "vfs:distro:sys",
+            "homepage:homepage:sys"
+
+        ],
+        "grant_capabilities": [
+            "http-server:distro:sys",
+            "http-client:distro:sys",
+            "vfs:distro:sys",
+            "homepage:homepage:sys"
+        ],
+        "public": true
     }
 ]

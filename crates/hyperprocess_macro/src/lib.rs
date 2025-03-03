@@ -79,13 +79,6 @@ struct HandlerDispatch {
     http: proc_macro2::TokenStream,
 }
 
-/// Debug handler dispatch strings
-struct DebugHandlerDispatch {
-    local: String,
-    remote: String,
-    http: String,
-}
-
 /// Init method details for code generation
 struct InitMethodDetails {
     identifier: proc_macro2::TokenStream,
@@ -276,6 +269,14 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
 
 /// Validate the init method signature
 fn validate_init_method(method: &syn::ImplItemFn) -> syn::Result<()> {
+    // Ensure the method is async
+    if method.sig.asyncness.is_none() {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "Init method must be declared as async",
+        ));
+    }
+
     // Ensure first param is &mut self
     if !has_valid_self_receiver(method) {
         return Err(syn::Error::new_spanned(
@@ -464,6 +465,14 @@ fn analyze_methods(
         }
     }
 
+    // Check if we have at least one handler
+    if function_metadata.is_empty() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "You must specify at least one handler with #[remote], #[local], or #[http] attribute. Without any handlers, this hyperprocess wouldn't respond to any requests.",
+        ));
+    }
+
     Ok((init_method, ws_method, function_metadata))
 }
 
@@ -585,96 +594,6 @@ fn generate_enum_variant(
 }
 
 //------------------------------------------------------------------------------
-// Debug String Generation Functions
-//------------------------------------------------------------------------------
-
-/// Generate debug string representations of the Request and Response enums
-fn generate_debug_enum_strings(function_metadata: &[FunctionMetadata]) -> (String, String) {
-    let debug_request_enum = function_metadata
-        .iter()
-        .map(|func| generate_debug_enum_variant(&func.variant_name, &func.params))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let debug_response_enum = function_metadata
-        .iter()
-        .map(|func| {
-            let variant_name = &func.variant_name;
-
-            if let Some(return_type) = &func.return_type {
-                let type_str = return_type.to_token_stream().to_string();
-                if type_str == "()" {
-                    format!("  {}", variant_name)
-                } else {
-                    format!("  {}({})", variant_name, type_str)
-                }
-            } else {
-                format!("  {}", variant_name)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    (debug_request_enum, debug_response_enum)
-}
-
-/// Generate a debug string for an enum variant
-fn generate_debug_enum_variant(variant_name: &str, params: &[syn::Type]) -> String {
-    if params.is_empty() {
-        format!("  {}", variant_name)
-    } else if params.len() == 1 {
-        let param_type = params[0].to_token_stream().to_string();
-        format!("  {}({})", variant_name, param_type)
-    } else {
-        let param_types: Vec<_> = params
-            .iter()
-            .map(|ty| ty.to_token_stream().to_string())
-            .collect();
-        format!("  {}({})", variant_name, param_types.join(", "))
-    }
-}
-
-/// Generate a debug string representation of a handler dispatch code
-fn generate_debug_handler_string(handlers: &[&FunctionMetadata], handler_type: &str) -> String {
-    if handlers.is_empty() {
-        return format!("// No {} handlers defined", handler_type).to_string();
-    }
-
-    let debug_cases = handlers
-        .iter()
-        .map(|func| {
-            let fn_name = &func.name;
-            let variant_name = &func.variant_name;
-            let async_keyword = if func.is_async { "async " } else { "" };
-
-            if func.params.is_empty() {
-                format!(
-                    "    Request::{} => {{ /* Call state.{}{}() */ }}",
-                    variant_name, async_keyword, fn_name
-                )
-            } else if func.params.len() == 1 {
-                format!(
-                    "    Request::{}(param) => {{ /* Call state.{}{}(param) */ }}",
-                    variant_name, async_keyword, fn_name
-                )
-            } else {
-                let param_count = func.params.len();
-                let param_names: Vec<_> = (0..param_count).map(|i| format!("param{}", i)).collect();
-                let params_list = param_names.join(", ");
-
-                format!(
-                    "    Request::{}({}) => {{ /* Call state.{}{}({}) */ }}",
-                    variant_name, params_list, async_keyword, fn_name, params_list
-                )
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!("match request {{\n{}\n}}", debug_cases)
-}
-
-//------------------------------------------------------------------------------
 // Handler Generation Functions
 //------------------------------------------------------------------------------
 
@@ -752,7 +671,6 @@ fn generate_response_handling(
                 let response = Response::#variant_name(result);
                 let resp = hyperware_process_lib::Response::new()
                     .body(serde_json::to_vec(&response).unwrap());
-                kiprintln!("Sending {} response: {:?}", #type_name, response);
                 resp.send().unwrap();
             }
         }
@@ -760,7 +678,6 @@ fn generate_response_handling(
             quote! {
                 let response = Response::#variant_name(result);
                 let response_bytes = serde_json::to_vec(&response).unwrap();
-                kiprintln!("Sending HTTP response: {:?}", response);
                 hyperware_process_lib::http::server::send_response(
                     hyperware_process_lib::http::StatusCode::OK,
                     None,
@@ -882,9 +799,19 @@ fn init_method_opt_to_token(init_method: &Option<syn::Ident>) -> proc_macro2::To
 }
 
 /// Convert optional init method to token stream for method call
-fn init_method_opt_to_call(init_method: &Option<syn::Ident>) -> proc_macro2::TokenStream {
+fn init_method_opt_to_call(
+    init_method: &Option<syn::Ident>,
+    self_ty: &Box<syn::Type>,
+) -> proc_macro2::TokenStream {
     if let Some(method_name) = init_method {
-        quote! { state.#method_name(); }
+        quote! {
+            // Create a pointer to state for use in the async block
+            let state_ptr: *mut #self_ty = &mut state;
+            hyperware_app_common::hyper! {
+                // Inside the async block, use the pointer to access state
+                unsafe { (*state_ptr).#method_name().await };
+            }
+        }
     } else {
         quote! {}
     }
@@ -978,7 +905,6 @@ fn generate_message_handlers(
                             });
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketPush { channel_id, message_type } => {
-                            hyperware_process_lib::kiprintln!("WebSocketPush called with: {:?}, {:?}", channel_id, message_type);
                             let Some(blob) = message.blob() else {
                                 hyperware_process_lib::logging::warn!("Failed to get blob for WebSocketPush, exiting");
                                 return;
@@ -993,11 +919,9 @@ fn generate_message_handlers(
                             }
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketOpen { path, channel_id } => {
-                            hyperware_process_lib::kiprintln!("WebSocketOpen called with: {:?}, {:?}", path, channel_id);
                             hyperware_app_common::get_server().unwrap().handle_websocket_open(&path, channel_id);
                         },
                         hyperware_process_lib::http::server::HttpServerRequest::WebSocketClose(channel_id) => {
-                            hyperware_process_lib::kiprintln!("WebSocketClose called with: {:?}", channel_id);
                             hyperware_app_common::get_server().unwrap().handle_websocket_close(channel_id);
                         }
                     }
@@ -1069,12 +993,9 @@ fn generate_component_impl(
     cleaned_impl_block: &ItemImpl,
     request_enum: &proc_macro2::TokenStream,
     response_enum: &proc_macro2::TokenStream,
-    debug_request_enum: &str,
-    debug_response_enum: &str,
     init_method_details: &InitMethodDetails,
     ws_method_details: &WsMethodDetails,
     handler_arms: &HandlerDispatch,
-    debug_handler_dispatches: &DebugHandlerDispatch,
 ) -> proc_macro2::TokenStream {
     // Extract values from args for use in the quote macro
     let name = &args.name;
@@ -1100,9 +1021,6 @@ fn generate_component_impl(
     let init_method_ident = &init_method_details.identifier;
     let init_method_call = &init_method_details.call;
     let ws_method_call = &ws_method_details.call;
-    let debug_local_handler_dispatch = &debug_handler_dispatches.local;
-    let debug_remote_handler_dispatch = &debug_handler_dispatches.remote;
-    let debug_http_handler_dispatch = &debug_handler_dispatches.http;
 
     // Generate message handler functions
     let message_handlers = generate_message_handlers(self_ty, handler_arms, ws_method_call);
@@ -1130,38 +1048,6 @@ fn generate_component_impl(
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
-                // Debug: Print the generated enum definitions in a clean format
-                kiprintln!("============= GENERATED REQUEST ENUM =============");
-                kiprintln!("enum Request {{");
-                kiprintln!("{}", #debug_request_enum);
-                kiprintln!("}}");
-
-                kiprintln!("============= GENERATED RESPONSE ENUM ============");
-                kiprintln!("enum Response {{");
-                kiprintln!("{}", #debug_response_enum);
-                kiprintln!("}}");
-
-                // Debug: Print the handler dispatch code
-                kiprintln!("============= LOCAL HANDLER DISPATCH =============");
-                kiprintln!("// Pseudo-code representation of generated handler:");
-                kiprintln!("fn handle_local_request(state: &mut State, request: Request) {{");
-                kiprintln!("{}", #debug_local_handler_dispatch);
-                kiprintln!("}}");
-
-                kiprintln!("============= REMOTE HANDLER DISPATCH ============");
-                kiprintln!("// Pseudo-code representation of generated handler:");
-                kiprintln!("fn handle_remote_request(state: &mut State, message: &Message, request: Request) {{");
-                kiprintln!("{}", #debug_remote_handler_dispatch);
-                kiprintln!("}}");
-
-                kiprintln!("============= HTTP HANDLER DISPATCH ==============");
-                kiprintln!("// Pseudo-code representation of generated handler:");
-                kiprintln!("fn handle_http_request(state: &mut State, request: Request) {{");
-                kiprintln!("{}", #debug_http_handler_dispatch);
-                kiprintln!("}}");
-
-                kiprintln!("Starting application...");
-
                 // Initialize our state
                 let mut state = hyperware_app_common::initialize_state::<#self_ty>();
 
@@ -1312,21 +1198,11 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate Request and Response enums
     let (request_enum, response_enum) = generate_request_response_enums(&function_metadata);
 
-    // Generate debug strings
-    let (debug_request_enum, debug_response_enum) = generate_debug_enum_strings(&function_metadata);
-
     // Generate handler match arms
     let handler_arms = HandlerDispatch {
         local: generate_handler_dispatch(&handlers.local, self_ty, HandlerType::Local),
         remote: generate_handler_dispatch(&handlers.remote, self_ty, HandlerType::Remote),
         http: generate_handler_dispatch(&handlers.http, self_ty, HandlerType::Http),
-    };
-
-    // Generate debug handler strings
-    let debug_handler_dispatches = DebugHandlerDispatch {
-        local: generate_debug_handler_string(&handlers.local, "local"),
-        remote: generate_debug_handler_string(&handlers.remote, "remote"),
-        http: generate_debug_handler_string(&handlers.http, "HTTP"),
     };
 
     // Clean the implementation block
@@ -1335,7 +1211,7 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Prepare init method details for code generation
     let init_method_details = InitMethodDetails {
         identifier: init_method_opt_to_token(&init_method),
-        call: init_method_opt_to_call(&init_method),
+        call: init_method_opt_to_call(&init_method, self_ty),
     };
 
     // Prepare WebSocket method details for code generation
@@ -1351,12 +1227,9 @@ pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
         &cleaned_impl_block,
         &request_enum,
         &response_enum,
-        &debug_request_enum,
-        &debug_response_enum,
         &init_method_details,
         &ws_method_details,
         &handler_arms,
-        &debug_handler_dispatches,
     )
     .into()
 }
