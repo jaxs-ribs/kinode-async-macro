@@ -1,10 +1,12 @@
 #![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use hyperprocess_macro::hyperprocess;
 use hyperware_app_common::State;
-use hyperware_process_lib::logging::info;
-use hyperware_process_lib::LazyLoadBlob;
+use hyperware_process_lib::{Address, LazyLoadBlob, Request as HyperwareRequest};
 use hyperware_process_lib::{http::server::WsMessageType};
+use hyperware_app_common::send;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use hyperware_process_lib::kiprintln;
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct AsyncRequesterState {
@@ -30,26 +32,25 @@ struct AsyncRequesterState {
 impl AsyncRequesterState {
     #[init]
     async fn initialize(&mut self) {
-        info!("Initializing Async Requester");
-        self.request_count = 0;
-        info!("The counter is now {}", self.request_count);
+        kiprintln!("Initializing Async Requester");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        kiprintln!("Sending request");
+        let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
+        let result = send::<Value>(&json!({"CallMe": 1337}), address, 30).await;
+        kiprintln!("Received result {:?}", result);
     }
 
     #[local]
-    fn increment_counter(
+    async fn increment_counter(
         &mut self,
         value: i32,
         another_value: String,
         yet_another_value: f32,
     ) -> String {
+        kiprintln!("Sending request");
         self.request_count += 1;
-        info!(
-            "Called with: {} {} {}",
-            value,
-            another_value,
-            yet_another_value
-        );
-        info!("Counter: {}", self.request_count);
+        kiprintln!("Counter: {}", self.request_count);
+
         "some string".to_string()
     }
 
@@ -62,31 +63,31 @@ impl AsyncRequesterState {
         yet_another_value: bool,
     ) -> Vec<i32> {
         self.request_count += 1;
-        info!(
+        kiprintln!(
             "Called with: {} {:?} {}",
             value,
             another_value,
             yet_another_value
         );
-        info!("Counter: {}", self.request_count);
+        kiprintln!("Counter: {}", self.request_count);
         vec![42, 43, 44]
     }
 
     #[local]
     async fn increment_counter_async(&mut self, value: i32, name: String) -> String {
         self.request_count += 1;
-        info!("Starting async operations for {}", name);
+        kiprintln!("Starting async operations for {}", name);
         let user_data = fetch_data("users", value).await;
         let stats_data = fetch_data("stats", value).await;
         let result = format!("{} | {}", user_data, stats_data);
-        info!("Completed. Result: {}", result);
+        kiprintln!("Completed. Result: {}", result);
         format!("Results for {}: {}", name, result)
     }
 
     #[remote]
     fn some_other_function(&mut self, string_val: String, another_string_val: String) -> f32 {
         self.request_count += 1;
-        info!(
+        kiprintln!(
             "We have been called with thes following values: {:?}, {:?}",
             string_val,
             another_string_val
@@ -98,7 +99,7 @@ impl AsyncRequesterState {
     #[http]
     async fn increment_counter_3(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
-        info!(
+        kiprintln!(
             "We have been called with thes following values: {:?}",
             string_val
         );
@@ -109,7 +110,7 @@ impl AsyncRequesterState {
     #[http]
     async fn increment_counter_4(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
-        info!(
+        kiprintln!(
             "We have been called with thes following values: {:?}",
             string_val
         );
@@ -118,14 +119,14 @@ impl AsyncRequesterState {
 
     #[ws]
     fn websocket(&mut self, channel_id: u32, message_type: WsMessageType, blob: LazyLoadBlob) {
-        info!("Websocket called with: {:?}, {:?}, {:?}", channel_id, message_type, blob);
+        kiprintln!("Websocket called with: {:?}, {:?}, {:?}", channel_id, message_type, blob);
         self.request_count += 1;
-        info!("Counter: {}", self.request_count);
+        kiprintln!("Counter: {}", self.request_count);
     }
 }
 
 async fn fetch_data(endpoint: &str, id: i32) -> String {
-    info!("Fetching data from {} with id {}", endpoint, id);
+    kiprintln!("Fetching data from {} with id {}", endpoint, id);
     // In a real app, this would make an actual HTTP request
     // For this test, we're just simulating an async operation
     format!("Data from {} for id {}", endpoint, id)

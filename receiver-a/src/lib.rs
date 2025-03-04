@@ -24,11 +24,6 @@ impl ReceiverAState {
         info!("Initializing Receiver A");
         self.request_count = 0;
 
-        // let request_json = json!({
-        //     "hello": {
-        //         "value": 42
-        //     }
-        // });
         info!("The counter is now {}", self.request_count);
     }
 

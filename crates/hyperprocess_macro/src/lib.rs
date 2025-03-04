@@ -1097,9 +1097,9 @@ fn generate_component_impl(
                                         .map(|bytes| String::from_utf8_lossy(bytes).to_string())
                                         .unwrap_or_else(|| "no context".to_string());
 
-                                    hyperware_app_common::APP_CONTEXT.with(|ctx| {
-                                        let mut ctx_mut = ctx.borrow_mut();
-                                        ctx_mut.response_registry.insert(correlation_id, body);
+                                    hyperware_app_common::RESPONSE_REGISTRY.with(|registry| {
+                                        let mut registry_mut = registry.borrow_mut();
+                                        registry_mut.insert(correlation_id, body);
                                     });
                                 }
                                 hyperware_process_lib::Message::Request { .. } => {
@@ -1150,8 +1150,9 @@ fn generate_component_impl(
                                     // Serialize None as the response
                                     let none_response = serde_json::to_vec(kind).unwrap();
 
-                                    hyperware_app_common::APP_CONTEXT.with(|ctx| {
-                                        ctx.borrow_mut().response_registry.insert(correlation_id, none_response);
+                                    hyperware_app_common::RESPONSE_REGISTRY.with(|registry| {
+                                        let mut registry_mut = registry.borrow_mut();
+                                        registry_mut.insert(correlation_id, none_response);
                                     });
                                 }
                             }

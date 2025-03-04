@@ -22,6 +22,7 @@ use hyperware_process_lib::{
 
 pub mod prelude {
     pub use crate::APP_CONTEXT;
+    pub use crate::RESPONSE_REGISTRY;
     // Add other commonly used items here
 }
 
@@ -29,16 +30,16 @@ thread_local! {
     pub static APP_CONTEXT: RefCell<AppContext> = RefCell::new(AppContext {
         hidden_state: None,
         executor: Executor::new(),
-        response_registry: HashMap::new(),
         current_path: None,
         current_server: None,
     });
+    
+    pub static RESPONSE_REGISTRY: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
 }
 
 pub struct AppContext {
     pub hidden_state: Option<HiddenState>,
     pub executor: Executor,
-    pub response_registry: HashMap<String, Vec<u8>>,
     pub current_path: Option<String>,
     pub current_server: Option<*mut HttpServer>,
 }
@@ -97,9 +98,9 @@ impl Future for ResponseFuture {
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         let correlation_id = &self.correlation_id;
 
-        let maybe_bytes = APP_CONTEXT.with(|ctx| {
-            let mut ctx_mut = ctx.borrow_mut();
-            ctx_mut.response_registry.remove(correlation_id)
+        let maybe_bytes = RESPONSE_REGISTRY.with(|registry| {
+            let mut registry_mut = registry.borrow_mut();
+            registry_mut.remove(correlation_id)
         });
 
         if let Some(bytes) = maybe_bytes {
@@ -350,8 +351,8 @@ pub fn handle_send_error<S: Any + serde::Serialize>(send_error: &SendError, _use
             // Serialize None as the response
             let none_response = serde_json::to_vec(kind).unwrap();
 
-            APP_CONTEXT.with(|ctx| {
-                ctx.borrow_mut().response_registry.insert(correlation_id, none_response);
+            RESPONSE_REGISTRY.with(|registry| {
+                registry.borrow_mut().insert(correlation_id, none_response);
             });
         }
     }
