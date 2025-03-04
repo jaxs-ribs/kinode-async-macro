@@ -6,15 +6,9 @@ use hyperware_process_lib::LazyLoadBlob;
 use hyperware_process_lib::http::server::WsMessageType;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 struct ReceiverAState {
     request_count: u64,
-}
-
-impl State for ReceiverAState {
-    fn new() -> Self {
-        Self { request_count: 0 }
-    }
 }
 
 #[hyperprocess(

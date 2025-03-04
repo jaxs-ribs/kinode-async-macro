@@ -241,9 +241,10 @@ pub trait State {
 }
 
 /// Initialize state from persisted storage or create new if none exists
+/// TODO: Delete?
 pub fn initialize_state<S>() -> S
 where
-    S: State + for<'de> serde::Deserialize<'de>,
+    S: serde::de::DeserializeOwned + Default,
 {
     match get_state() {
         Some(bytes) => match rmp_serde::from_slice::<S>(&bytes) {
@@ -254,7 +255,7 @@ where
         },
         None => {
             info!("no existing state, creating new one");
-            S::new()
+            S::default()
         }
     }
 }
