@@ -38,6 +38,9 @@ impl AsyncRequesterState {
         let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
         let result = send::<Value>(&json!({"CallMe": 1337}), address, 30).await;
         kiprintln!("Received result {:?}", result);
+        let address: Address = ("our", "receiver-b", "async-app", "uncentered.os").into();
+        let result = send::<Value>(&json!({"Hello": "Mash Potatoes"}), address, 30).await;
+        kiprintln!("Received result {:?}", result);
     }
 
     #[local]
