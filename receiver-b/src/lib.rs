@@ -1,8 +1,9 @@
 #![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use hyperprocess_macro::hyperprocess;
 use hyperware_app_common::State;
+use hyperware_process_lib::logging::info;
 use hyperware_process_lib::LazyLoadBlob;
-use hyperware_process_lib::{http::server::WsMessageType, kiprintln};
+use hyperware_process_lib::http::server::WsMessageType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,13 +27,15 @@ impl State for ReceiverBState {
 impl ReceiverBState {
     #[init]
     async fn initialize(&mut self) {
-        kiprintln!("Initializing Receiver B");
+        info!("Initializing Receiver B");
         self.request_count = 0;
-        kiprintln!("The counter is now {}", self.request_count);
+        info!("The counter is now {}", self.request_count);
     }
 
     #[local]
-    fn hello(&mut self, value: i32) -> String {
-        return "Hello".to_string();
+    fn hello(&mut self, value: String) -> f32 {
+        let num_chars = value.len() as f32;
+        info!("Received string of length {}", num_chars);
+        num_chars
     }
 }

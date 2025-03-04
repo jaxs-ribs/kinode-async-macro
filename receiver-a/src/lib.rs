@@ -1,8 +1,9 @@
 #![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use hyperprocess_macro::hyperprocess;
 use hyperware_app_common::State;
+use hyperware_process_lib::logging::info;
 use hyperware_process_lib::LazyLoadBlob;
-use hyperware_process_lib::{http::server::WsMessageType, kiprintln};
+use hyperware_process_lib::http::server::WsMessageType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,13 +27,21 @@ impl State for ReceiverAState {
 impl ReceiverAState {
     #[init]
     async fn initialize(&mut self) {
-        kiprintln!("Initializing Receiver A");
+        info!("Initializing Receiver A");
         self.request_count = 0;
-        kiprintln!("The counter is now {}", self.request_count);
+
+        // let request_json = json!({
+        //     "hello": {
+        //         "value": 42
+        //     }
+        // });
+        info!("The counter is now {}", self.request_count);
     }
 
     #[local]
-    fn hello(&mut self, value: i32) -> String {
+    fn call_me(&mut self, value: i32) -> String {
+        info!("Receiver A: Received call_me request");
+        std::thread::sleep(std::time::Duration::from_secs(3));
         return "Hello".to_string();
     }
 }

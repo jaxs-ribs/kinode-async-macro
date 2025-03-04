@@ -1,8 +1,9 @@
 #![allow(warnings)] // TODO: Zena: Remove this and fix warnings
 use hyperprocess_macro::hyperprocess;
 use hyperware_app_common::State;
+use hyperware_process_lib::logging::info;
 use hyperware_process_lib::LazyLoadBlob;
-use hyperware_process_lib::{http::server::{WsMessageType}, kiprintln};
+use hyperware_process_lib::{http::server::WsMessageType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,9 +36,9 @@ impl State for AsyncRequesterState {
 impl AsyncRequesterState {
     #[init]
     async fn initialize(&mut self) {
-        kiprintln!("Initializing Async Requester");
+        info!("Initializing Async Requester");
         self.request_count = 0;
-        kiprintln!("The counter is now {}", self.request_count);
+        info!("The counter is now {}", self.request_count);
     }
 
     #[local]
@@ -48,13 +49,13 @@ impl AsyncRequesterState {
         yet_another_value: f32,
     ) -> String {
         self.request_count += 1;
-        kiprintln!(
+        info!(
             "Called with: {} {} {}",
             value,
             another_value,
             yet_another_value
         );
-        kiprintln!("Counter: {}", self.request_count);
+        info!("Counter: {}", self.request_count);
         "some string".to_string()
     }
 
@@ -67,31 +68,31 @@ impl AsyncRequesterState {
         yet_another_value: bool,
     ) -> Vec<i32> {
         self.request_count += 1;
-        kiprintln!(
+        info!(
             "Called with: {} {:?} {}",
             value,
             another_value,
             yet_another_value
         );
-        kiprintln!("Counter: {}", self.request_count);
+        info!("Counter: {}", self.request_count);
         vec![42, 43, 44]
     }
 
     #[local]
     async fn increment_counter_async(&mut self, value: i32, name: String) -> String {
         self.request_count += 1;
-        kiprintln!("Starting async operations for {}", name);
+        info!("Starting async operations for {}", name);
         let user_data = fetch_data("users", value).await;
         let stats_data = fetch_data("stats", value).await;
         let result = format!("{} | {}", user_data, stats_data);
-        kiprintln!("Completed. Result: {}", result);
+        info!("Completed. Result: {}", result);
         format!("Results for {}: {}", name, result)
     }
 
     #[remote]
     fn some_other_function(&mut self, string_val: String, another_string_val: String) -> f32 {
         self.request_count += 1;
-        kiprintln!(
+        info!(
             "We have been called with thes following values: {:?}, {:?}",
             string_val,
             another_string_val
@@ -103,7 +104,7 @@ impl AsyncRequesterState {
     #[http]
     async fn increment_counter_3(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
-        kiprintln!(
+        info!(
             "We have been called with thes following values: {:?}",
             string_val
         );
@@ -114,7 +115,7 @@ impl AsyncRequesterState {
     #[http]
     async fn increment_counter_4(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
-        kiprintln!(
+        info!(
             "We have been called with thes following values: {:?}",
             string_val
         );
@@ -123,14 +124,14 @@ impl AsyncRequesterState {
 
     #[ws]
     fn websocket(&mut self, channel_id: u32, message_type: WsMessageType, blob: LazyLoadBlob) {
-        kiprintln!("Websocket called with: {:?}, {:?}, {:?}", channel_id, message_type, blob);
+        info!("Websocket called with: {:?}, {:?}, {:?}", channel_id, message_type, blob);
         self.request_count += 1;
-        kiprintln!("Counter: {}", self.request_count);
+        info!("Counter: {}", self.request_count);
     }
 }
 
 async fn fetch_data(endpoint: &str, id: i32) -> String {
-    kiprintln!("Fetching data from {} with id {}", endpoint, id);
+    info!("Fetching data from {} with id {}", endpoint, id);
     // In a real app, this would make an actual HTTP request
     // For this test, we're just simulating an async operation
     format!("Data from {} for id {}", endpoint, id)
