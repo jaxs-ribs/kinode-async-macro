@@ -27,10 +27,10 @@ impl ReceiverBState {
 
     #[local]
     fn hello(&mut self, struct_val: SomeStruct) -> f32 {
-        let num_chars = struct_val.field1.len() as f32;
-        let num_chars_enum = match struct_val.field3 {
-            SomeEnum::Variant1(s) => s.len() as f32,
-            SomeEnum::Variant2(i) => i as f32,
+        let num_chars = struct_val.field_one.len() as f32;
+        let num_chars_enum = match struct_val.field_three {
+            SomeEnum::VariantOne(s) => s.len() as f32,
+            SomeEnum::VariantTwo(i) => i as f32,
         };
         info!("Received string of length {}", num_chars);
         num_chars
@@ -39,13 +39,13 @@ impl ReceiverBState {
 
 #[derive(Debug, Serialize, Deserialize)]
 enum SomeEnum {
-    Variant1(String),
-    Variant2(i32),
+    VariantOne(String),
+    VariantTwo(i32),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct SomeStruct {
-    field1: String,
-    field2: i32,
-    field3: SomeEnum,
+    field_one: String,
+    field_two: i32,
+    field_three: SomeEnum,
 }

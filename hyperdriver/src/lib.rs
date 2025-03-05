@@ -59,7 +59,7 @@ impl AsyncRequesterState {
 
     #[remote]
     #[local]
-    fn increment_counter_2(
+    fn increment_counter_two(
         &mut self,
         value: f64,
         another_value: Vec<String>,
@@ -100,7 +100,7 @@ impl AsyncRequesterState {
 
     #[local]
     #[http]
-    async fn increment_counter_3(&mut self, string_val: String) -> f32 {
+    async fn increment_counter_three(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
         kiprintln!(
             "We have been called with thes following values: {:?}",
@@ -111,7 +111,7 @@ impl AsyncRequesterState {
 
     #[local]
     #[http]
-    async fn increment_counter_4(&mut self, string_val: String) -> f32 {
+    async fn increment_counter_four(&mut self, string_val: String) -> f32 {
         self.request_count += 1;
         kiprintln!(
             "We have been called with thes following values: {:?}",
