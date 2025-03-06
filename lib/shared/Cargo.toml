@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-kinode_app_common = { path = "../../crates/kinode_app_common" }
+hyperware_app_common = { path = "../../crates/hyperware_app_common" }
 process_macros = "0.1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 wit-bindgen = "0.36.0"
-kinode_process_lib = { version = "0.10.2", features = ["logging"] }
+hyperware_process_lib = { version = "1.0.2", features = ["logging"] }

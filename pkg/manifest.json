@@ -1,7 +1,7 @@
 [
     {
-        "process_name": "async-receiver-a",
-        "process_wasm_path": "/async-receiver-a.wasm",
+        "process_name": "hyperdriver",
+        "process_wasm_path": "/hyperdriver.wasm",
         "on_exit": "None",
         "request_networking": true,
         "request_capabilities": [
@@ -18,10 +18,10 @@
             "homepage:homepage:sys"
         ],
         "public": true
-    },
+    }, 
     {
-        "process_name": "async-receiver-b",
-        "process_wasm_path": "/async-receiver-b.wasm",
+        "process_name": "receiver-a",
+        "process_wasm_path": "/receiver-a.wasm",
         "on_exit": "None",
         "request_networking": true,
         "request_capabilities": [
@@ -38,30 +38,10 @@
             "homepage:homepage:sys"
         ],
         "public": true
-    },
+    }, 
     {
-        "process_name": "async-receiver-c",
-        "process_wasm_path": "/async-receiver-c.wasm",
-        "on_exit": "None",
-        "request_networking": true,
-        "request_capabilities": [
-            "http-server:distro:sys",
-            "http-client:distro:sys",
-            "vfs:distro:sys",
-            "homepage:homepage:sys"
-
-        ],
-        "grant_capabilities": [
-            "http-server:distro:sys",
-            "http-client:distro:sys",
-            "vfs:distro:sys",
-            "homepage:homepage:sys"
-        ],
-        "public": true
-    },
-    {
-        "process_name": "async-requester",
-        "process_wasm_path": "/async-requester.wasm",
+        "process_name": "receiver-b",
+        "process_wasm_path": "/receiver-b.wasm",
         "on_exit": "None",
         "request_networking": true,
         "request_capabilities": [

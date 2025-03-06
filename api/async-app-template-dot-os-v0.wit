@@ -1,0 +1,6 @@
+world async-app-template-dot-os-v0 {
+    import receiver-b;
+    import async-requester;
+    import receiver-a;
+    include process-v1;
+}
