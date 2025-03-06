@@ -7,6 +7,7 @@ use hyperware_app_common::send;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use hyperware_process_lib::kiprintln;
+use crate::hyperware::process::receiver_b::SomeEnum;
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct AsyncRequesterState {
@@ -132,6 +133,7 @@ async fn fetch_data(endpoint: &str, id: i32) -> String {
     kiprintln!("Fetching data from {} with id {}", endpoint, id);
     // In a real app, this would make an actual HTTP request
     // For this test, we're just simulating an async operation
+    let abcdefg: SomeEnum;
     format!("Data from {} for id {}", endpoint, id)
 }
 

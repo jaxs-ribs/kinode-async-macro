@@ -1,0 +1,10 @@
+interface async-requester {
+    use standard.{address};
+
+    increment-counter: func(target: address, value: s32, another-value: string, yet-another-value: f32) -> string;
+    increment-counter-two: func(target: address, value: f64, another-value: list<string>, yet-another-value: bool) -> list<s32>;
+    increment-counter-async: func(target: address, value: s32, name: string) -> string;
+    some-other-function: func(target: address, string-val: string, another-string-val: string) -> f32;
+    increment-counter-three: func(target: address, string-val: string) -> f32;
+    increment-counter-four: func(target: address, string-val: string) -> f32;
+}

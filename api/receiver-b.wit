@@ -1,0 +1,16 @@
+interface receiver-b {
+    use standard.{address};
+
+    record some-struct {
+        field-one: string,
+        field-two: s32,
+        field-three: some-enum
+    }
+
+    variant some-enum {
+        variant-one(string),
+        variant-two(s32)
+    }
+
+    hello: func(target: address, struct-val: some-struct) -> f32;
+}
