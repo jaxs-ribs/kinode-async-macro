@@ -12,5 +12,5 @@ interface receiver-b {
         variant-two(s32)
     }
 
-    hello: func(target: address, struct-val: some-struct) -> f32;
+    hello: func(target: address, struct-val: some-struct) -> result<f32, string>;
 }
