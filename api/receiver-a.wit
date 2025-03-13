@@ -1,0 +1,6 @@
+interface receiver-a {
+    use standard.{address};
+
+    //local
+    call-me: func(target: address, value: s32) -> result<string, string>;
+}

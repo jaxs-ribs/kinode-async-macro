@@ -1,0 +1,3 @@
+world receiver-b-api-v0 {
+    export receiver-b;
+}
