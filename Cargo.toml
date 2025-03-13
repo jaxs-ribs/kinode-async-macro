@@ -1,13 +1,16 @@
-[workspace]
-resolver = "2"
-members = [
-    "hyperdriver",
-    "receiver-a",
-    "receiver-b",
-    "lib/shared",
-]
-
 [profile.release]
-panic = "abort"
-opt-level = "s"
 lto = true
+opt-level = "s"
+panic = "abort"
+
+[workspace]
+members = [
+    "async-requester-api",
+    "hyperdriver",
+    "lib/shared",
+    "receiver-a",
+    "receiver-a-api",
+    "receiver-b",
+    "receiver-b-api",
+]
+resolver = "2"

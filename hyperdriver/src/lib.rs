@@ -138,20 +138,20 @@ async fn fetch_data(endpoint: &str, id: i32) -> String {
     // For this test, we're just simulating an async operation
     let abcdefg: SomeEnum = SomeEnum::VariantOne("Hello".to_string());
 
-    // let address: WitAddress = WitAddress {
-    //     node: "our".to_string(),
-    //     process: ProcessId {
-    //         process_name: "receiver-b".to_string(),
-    //         package_name: "async-app".to_string(),
-    //         publisher_node: "uncentered.os".to_string(),
-    //     },
-    // };
+    let address: WitAddress = WitAddress {
+        node: "our".to_string(),
+        process: ProcessId {
+            process_name: "receiver-b".to_string(),
+            package_name: "async-app".to_string(),
+            publisher_node: "uncentered.os".to_string(),
+        },
+    };
 
-    // let result = hello(&address, &SomeStruct {
-    //     field_one: "Hello".to_string(),
-    //     field_two: 1337,
-    //     field_three: abcdefg,
-    // });
+    let result = hello(&address, &SomeStruct {
+        field_one: "Hello".to_string(),
+        field_two: 1337,
+        field_three: abcdefg,
+    });
     format!("Data from {} for id {}", endpoint, id)
 }
 

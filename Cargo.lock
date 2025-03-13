@@ -691,6 +691,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-requester-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "futures-util",
+ "hyperware_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2498,6 +2514,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "receiver-a-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "futures-util",
+ "hyperware_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "receiver-b"
 version = "0.1.0"
 dependencies = [
@@ -2512,6 +2544,22 @@ dependencies = [
  "serde",
  "serde_json",
  "shared",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
+name = "receiver-b-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "futures-util",
+ "hyperware_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
  "uuid",
  "wit-bindgen",
 ]

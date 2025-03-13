@@ -1,6 +1,6 @@
 world async-app-template-dot-os-v0 {
-    export receiver-b;
-    export async-requester;
-    export receiver-a;
+    import receiver-b;
+    import async-requester;
+    import receiver-a;
     include process-v1;
 }
