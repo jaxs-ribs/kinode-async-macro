@@ -144,13 +144,16 @@ async fn fetch_data(endpoint: &str, id: i32) -> String {
     //         publisher_node: "uncentered.os".to_string(),
     //     },
     // };
+    use crate::hyperware::process::receiver_b::{SomeStruct, SomeEnum};
+    use crate::hyperware_async::hello_local_rpc;
+
     let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-    let some_struct: crate::hyperware::process::receiver_b::SomeStruct = crate::hyperware::process::receiver_b::SomeStruct {
+    let some_struct = SomeStruct {
         field_one: "test".to_string(),
         field_two: 42,
-        field_three: crate::hyperware::process::receiver_b::SomeEnum::VariantOne("test".to_string()),
+        field_three: SomeEnum::VariantOne("test".to_string()),
     };
-    crate::hyperware_async::hello_local_rpc(address, some_struct);
+    hello_local_rpc(address, some_struct);
     
     
 
