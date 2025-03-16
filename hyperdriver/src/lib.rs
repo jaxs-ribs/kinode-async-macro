@@ -154,6 +154,7 @@ async fn fetch_data(endpoint: &str, id: i32) -> String {
         field_three: SomeEnum::VariantOne("test".to_string()),
     };
     hello_local_rpc(address, some_struct);
+    hello_local_rpc(address, some_struct);
     
     
 
