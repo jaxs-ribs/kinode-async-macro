@@ -1573,12 +1573,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper_bindgen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "hyperware_app_common",
+ "hyperware_process_lib",
+ "log",
+ "once_cell",
+ "paste",
+ "proc-macro2",
+ "process_macros",
+ "quote",
+ "rmp-serde",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "syn 2.0.98",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "hyperdriver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
  "futures-util",
+ "hyper_bindgen",
  "hyperprocess_macro",
  "hyperware_app_common",
  "hyperware_process_lib",
@@ -1597,6 +1621,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures-util",
+ "hyper_bindgen",
  "hyperware_app_common",
  "hyperware_process_lib",
  "once_cell",
@@ -2485,6 +2510,7 @@ dependencies = [
  "anyhow",
  "futures",
  "futures-util",
+ "hyper_bindgen",
  "hyperprocess_macro",
  "hyperware_app_common",
  "hyperware_process_lib",
@@ -2504,6 +2530,7 @@ dependencies = [
  "anyhow",
  "futures",
  "futures-util",
+ "hyper_bindgen",
  "hyperprocess_macro",
  "hyperware_app_common",
  "hyperware_process_lib",

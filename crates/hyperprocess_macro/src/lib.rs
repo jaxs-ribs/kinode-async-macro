@@ -1032,6 +1032,10 @@ fn generate_component_impl(
             generate_unused_types: true,
             additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
         });
+        hyper_bindgen::generate!({
+            path: "target/wit",
+            world: #wit_world,
+        });
 
         use hyperware_process_lib::http::server::HttpBindingConfig;
         use hyperware_process_lib::http::server::WsBindingConfig;

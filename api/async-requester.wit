@@ -1,6 +1,11 @@
 interface async-requester {
     // This interface contains function signature definitions that will be used
     // by the hyper-bindgen macro to generate async function bindings.
+    //
+    // NOTE: This is currently a hacky workaround since WIT async functions are not
+    // available until WASI Preview 3. Once Preview 3 is integrated into Hyperware,
+    // we should switch to using proper async WIT function signatures instead of
+    // this struct-based approach with hyper-bindgen generating the async stubs.
 
     use standard.{address};
 

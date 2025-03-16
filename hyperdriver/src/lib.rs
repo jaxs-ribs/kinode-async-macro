@@ -8,6 +8,8 @@ use hyperware_app_common::send;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use hyperware_process_lib::kiprintln;
+use hyperware::process::standard::Address as WitAddress;
+use shared::SomeStruct;
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct AsyncRequesterState {
@@ -142,6 +144,15 @@ async fn fetch_data(endpoint: &str, id: i32) -> String {
     //         publisher_node: "uncentered.os".to_string(),
     //     },
     // };
+    let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
+    let some_struct: crate::hyperware::process::receiver_b::SomeStruct = crate::hyperware::process::receiver_b::SomeStruct {
+        field_one: "test".to_string(),
+        field_two: 42,
+        field_three: crate::hyperware::process::receiver_b::SomeEnum::VariantOne("test".to_string()),
+    };
+    crate::hyperware_async::hello_local_rpc(address, some_struct);
+    
+    
 
     format!("Data from {} for id {}", endpoint, id)
 }
