@@ -1,6 +1,13 @@
 interface receiver-a {
+    // This interface contains function signature definitions that will be used
+    // by the hyper-bindgen macro to generate async function bindings.
+
     use standard.{address};
 
-    //local
-    call-me: func(target: address, value: s32) -> result<string, string>;
+    // Function signature for: call-me (local)
+    record call-me-signature-local {
+        target: address,
+        value: s32,
+        returning: string
+    }
 }

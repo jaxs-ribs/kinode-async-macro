@@ -5,12 +5,9 @@ panic = "abort"
 
 [workspace]
 members = [
-    "async-requester-api",
     "hyperdriver",
     "lib/shared",
     "receiver-a",
-    "receiver-a-api",
     "receiver-b",
-    "receiver-b-api",
 ]
 resolver = "2"

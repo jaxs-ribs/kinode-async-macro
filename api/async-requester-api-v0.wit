@@ -1,3 +1,0 @@
-world async-requester-api-v0 {
-    export async-requester;
-}

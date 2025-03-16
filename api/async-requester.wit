@@ -1,19 +1,77 @@
 interface async-requester {
+    // This interface contains function signature definitions that will be used
+    // by the hyper-bindgen macro to generate async function bindings.
+
     use standard.{address};
 
-    //local
-    increment-counter: func(target: address, value: s32, another-value: string, yet-another-value: f32) -> result<string, string>;
-    //remote
-    //local
-    increment-counter-two: func(target: address, value: f64, another-value: list<string>, yet-another-value: bool) -> result<list<s32>, string>;
-    //local
-    increment-counter-async: func(target: address, value: s32, name: string) -> result<string, string>;
-    //remote
-    some-other-function: func(target: address, string-val: string, another-string-val: string) -> result<f32, string>;
-    //local
-    //http
-    increment-counter-three: func(target: address, string-val: string) -> result<f32, string>;
-    //local
-    //http
-    increment-counter-four: func(target: address, string-val: string) -> result<f32, string>;
+    // Function signature for: increment-counter (local)
+    record increment-counter-signature-local {
+        target: address,
+        value: s32,
+        another-value: string,
+        yet-another-value: f32,
+        returning: string
+    }
+
+    // Function signature for: increment-counter-two (remote)
+    record increment-counter-two-signature-remote {
+        target: address,
+        value: f64,
+        another-value: list<string>,
+        yet-another-value: bool,
+        returning: list<s32>
+    }
+
+    // Function signature for: increment-counter-two (local)
+    record increment-counter-two-signature-local {
+        target: address,
+        value: f64,
+        another-value: list<string>,
+        yet-another-value: bool,
+        returning: list<s32>
+    }
+
+    // Function signature for: increment-counter-async (local)
+    record increment-counter-async-signature-local {
+        target: address,
+        value: s32,
+        name: string,
+        returning: string
+    }
+
+    // Function signature for: some-other-function (remote)
+    record some-other-function-signature-remote {
+        target: address,
+        string-val: string,
+        another-string-val: string,
+        returning: f32
+    }
+
+    // Function signature for: increment-counter-three (local)
+    record increment-counter-three-signature-local {
+        target: address,
+        string-val: string,
+        returning: f32
+    }
+
+    // Function signature for: increment-counter-three (http)
+    record increment-counter-three-signature-http {
+        target: string,
+        string-val: string,
+        returning: f32
+    }
+
+    // Function signature for: increment-counter-four (local)
+    record increment-counter-four-signature-local {
+        target: address,
+        string-val: string,
+        returning: f32
+    }
+
+    // Function signature for: increment-counter-four (http)
+    record increment-counter-four-signature-http {
+        target: string,
+        string-val: string,
+        returning: f32
+    }
 }
