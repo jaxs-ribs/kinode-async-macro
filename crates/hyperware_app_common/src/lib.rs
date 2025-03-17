@@ -122,7 +122,7 @@ pub enum SendResult<R> {
 
 pub async fn send<R>(
     message: impl serde::Serialize,
-    target: Address,
+    target: &Address,
     timeout_secs: u64,
 ) -> SendResult<R>
 where
@@ -154,30 +154,6 @@ where
     };
     let error_msg = String::from_utf8_lossy(&response_bytes).into_owned();
     return SendResult::DeserializationError(error_msg);
-}
-
-pub async fn send_parallel_requests<R>(
-    targets: Vec<Address>,
-    messages: Vec<impl serde::Serialize>,
-    timeout_secs: u64,
-) -> Vec<SendResult<R>>
-where
-    R: serde::de::DeserializeOwned,
-{
-    let mut futures = Vec::new();
-
-    for (target, message) in targets.into_iter().zip(messages) {
-        futures.push(send::<R>(message, target, timeout_secs));
-    }
-
-    let mut results = Vec::new();
-
-    for future in futures {
-        let result = future.await;
-        results.push(result);
-    }
-
-    results
 }
 
 #[macro_export]

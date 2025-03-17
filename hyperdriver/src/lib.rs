@@ -1,4 +1,8 @@
-#![allow(warnings)] // TODO: Zena: Remove this and fix warnings
+#![allow(warnings)] 
+
+use caller_utils::receiver_b::hello_local_rpc;
+// use caller_utils::receiver_b::hello_local_rpc;
+// TODO: Zena: Remove this and fix warnings
 use hyperprocess_macro::hyperprocess;
 use hyperware::process::standard::ProcessId;
 use hyperware_app_common::State;
@@ -9,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use hyperware_process_lib::kiprintln;
 use hyperware::process::standard::Address as WitAddress;
-use shared::SomeStruct;
+use shared::receiver_address_a;
+use caller_utils::wit_custom::SomeEnum;
+use caller_utils::SomeStruct;
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct AsyncRequesterState {
@@ -38,9 +44,16 @@ impl AsyncRequesterState {
         kiprintln!("Initializing Async Requester");
         std::thread::sleep(std::time::Duration::from_secs(3));
         kiprintln!("Sending request");
-        let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-        let result = send::<String>(&json!({"CallMe": (42, 1337)}), address, 30).await;
-        kiprintln!("Received result {:?}", result);
+
+        let result = hello_local_rpc(&receiver_address_a(), SomeStruct {
+            field_one: "test".to_string(),
+            field_two: 42,
+            field_three: SomeEnum::VariantOne("test".to_string()),
+        }).await;
+        // kiprintln!("Received result {:?}", result);
+        // let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
+        // let result = send::<String>(&json!({"CallMe": (42, 1337)}), address, 30).await;
+        // kiprintln!("Received result {:?}", result);
         // let address: Address = ("our", "receiver-b", "async-app", "uncentered.os").into();
         // let result = send::<Value>(&json!({"Hello": "Mash Potatoes"}), address, 30).await;
         // kiprintln!("Received result {:?}", result);
