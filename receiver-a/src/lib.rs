@@ -28,7 +28,7 @@ impl ReceiverAState {
     }
 
     #[local]
-    fn call_me(&mut self, value: i32) -> String {
+    fn call_me(&mut self, value: i32, another_value: i32) -> String {
         info!("Receiver A: Received call_me request");
         std::thread::sleep(std::time::Duration::from_secs(3));
         return "Hello".to_string();

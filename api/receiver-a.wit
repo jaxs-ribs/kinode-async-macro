@@ -13,6 +13,7 @@ interface receiver-a {
     record call-me-signature-local {
         target: address,
         value: s32,
+        another-value: s32,
         returning: string
     }
 }

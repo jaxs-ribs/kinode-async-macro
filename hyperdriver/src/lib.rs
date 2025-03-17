@@ -39,15 +39,15 @@ impl AsyncRequesterState {
         std::thread::sleep(std::time::Duration::from_secs(3));
         kiprintln!("Sending request");
         let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-        let result = send::<Value>(&json!({"CallMe": 1337}), address, 30).await;
+        let result = send::<String>(&json!({"CallMe": (42, 1337)}), address, 30).await;
         kiprintln!("Received result {:?}", result);
-        let address: Address = ("our", "receiver-b", "async-app", "uncentered.os").into();
-        let result = send::<Value>(&json!({"Hello": "Mash Potatoes"}), address, 30).await;
-        kiprintln!("Received result {:?}", result);
+        // let address: Address = ("our", "receiver-b", "async-app", "uncentered.os").into();
+        // let result = send::<Value>(&json!({"Hello": "Mash Potatoes"}), address, 30).await;
+        // kiprintln!("Received result {:?}", result);
 
-        kiprintln!("Sleeping more");
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        fetch_data("users", 1337).await;
+        // kiprintln!("Sleeping more");
+        // std::thread::sleep(std::time::Duration::from_secs(3));
+        // fetch_data("users", 1337).await;
     }
 
     #[http]

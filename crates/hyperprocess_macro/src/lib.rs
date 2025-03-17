@@ -668,16 +668,16 @@ fn generate_response_handling(
     match handler_type {
         HandlerType::Local | HandlerType::Remote => {
             quote! {
-                let response = Response::#variant_name(result);
+                // Instead of wrapping in Response enum, directly serialize the result
                 let resp = hyperware_process_lib::Response::new()
-                    .body(serde_json::to_vec(&response).unwrap());
+                    .body(serde_json::to_vec(&result).unwrap());
                 resp.send().unwrap();
             }
         }
         HandlerType::Http => {
             quote! {
-                let response = Response::#variant_name(result);
-                let response_bytes = serde_json::to_vec(&response).unwrap();
+                // Instead of wrapping in Response enum, directly serialize the result
+                let response_bytes = serde_json::to_vec(&result).unwrap();
                 hyperware_process_lib::http::server::send_response(
                     hyperware_process_lib::http::StatusCode::OK,
                     None,
