@@ -44,6 +44,10 @@ impl AsyncRequesterState {
         let address: Address = ("our", "receiver-b", "async-app", "uncentered.os").into();
         let result = send::<Value>(&json!({"Hello": "Mash Potatoes"}), address, 30).await;
         kiprintln!("Received result {:?}", result);
+
+        kiprintln!("Sleeping more");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        fetch_data("users", 1337).await;
     }
 
     #[local]
@@ -133,33 +137,22 @@ impl AsyncRequesterState {
 
 async fn fetch_data(endpoint: &str, id: i32) -> String {
     kiprintln!("Fetching data from {} with id {}", endpoint, id);
-    // In a real app, this would make an actual HTTP request
-    // For this test, we're just simulating an async operation
+    // use crate::hyperware::process::receiver_b::{SomeStruct as Poob, SomeEnum};
+    // use crate::hyperware_async::hello_local_rpc;
+    // use crate::hyperware_async::call_me_local_rpc;
 
-    // let address: WitAddress = WitAddress {
-    //     node: "our".to_string(),
-    //     process: ProcessId {
-    //         process_name: "receiver-b".to_string(),
-    //         package_name: "async-app".to_string(),
-    //         publisher_node: "uncentered.os".to_string(),
-    //     },
+    // let address_1: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
+    // let address_2: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
+    // let some_struct = Poob {
+    //     field_one: "test".to_string(),
+    //     field_two: 42,
+    //     field_three: SomeEnum::VariantOne("test".to_string()),
     // };
-    use crate::hyperware::process::receiver_b::{SomeStruct as Poob, SomeEnum};
-    use crate::hyperware_async::hello_local_rpc;
-    use crate::hyperware_async::call_me_local_rpc;
+    // let a = hello_local_rpc(address_1, some_struct).await;
+    // kiprintln!("A: {:?}", a);
 
-    let address_1: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-    let address_2: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-    let some_struct = Poob {
-        field_one: "test".to_string(),
-        field_two: 42,
-        field_three: SomeEnum::VariantOne("test".to_string()),
-    };
-    let a = hello_local_rpc(address_1, some_struct).await;
-    kiprintln!("A: {:?}", a);
-
-    let b = call_me_local_rpc(address_2, 32).await;
-    kiprintln!("B: {:?}", b);
+    // let b = call_me_local_rpc(address_2, 32).await;
+    // kiprintln!("B: {:?}", b);
 
     
 
