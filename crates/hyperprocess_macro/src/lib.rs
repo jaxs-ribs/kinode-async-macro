@@ -1,4 +1,3 @@
-// this is hyperprocess_macro
 #![allow(warnings)]
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
@@ -6,6 +5,68 @@ use syn::{
     parse_macro_input, punctuated::Punctuated, spanned::Spanned, token::Comma, Expr, ItemImpl,
     Meta, ReturnType,
 };
+
+//------------------------------------------------------------------------------
+// Main Macro Entry Point
+//------------------------------------------------------------------------------
+
+/// The main procedural macro
+#[proc_macro_attribute]
+pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Check if we're running inside Rust Analyzer
+    if std::env::var("RUST_ANALYZER").is_ok() || std::env::var("__RA_ANALYZER_ACTIVE").is_ok() {
+        // Ultra-minimalist stub for Rust Analyzer - avoid any macro invocations
+        let item_str = item.to_string();
+        
+        // Hard-code an absolute minimal output that should satisfy compiler requirements
+        // but doesn't invoke any other macros or complex logic
+        let output = format!(r#"
+            // Original implementation
+            {}
+            
+            // Minimal stub enums for Rust Analyzer
+            enum Request {{ Stub }}
+            enum Response {{ Stub }}
+            
+            // Absolutely minimal component implementation
+            struct Component;
+            
+            // Stub Guest trait/type - don't actually invoke the wit_bindgen! macro
+            trait Guest {{
+                fn init(s: String);
+            }}
+            
+            impl Guest for Component {{
+                fn init(_s: String) {{
+                    // This is just a stub for Rust Analyzer
+                }}
+            }}
+            
+            // Minimal async module - don't actually invoke hyper_bindgen! macro
+            mod hyperware_async {{
+                pub async fn example(_target: String) -> String {{
+                    String::new()
+                }}
+            }}
+            
+            // Fake export macro implementation
+            macro_rules! export {{
+                ($t:ty) => {{}}
+            }}
+            
+            export!(Component);
+        "#, item_str);
+        
+        // Try to parse the result, fall back to original if parsing fails
+        match output.parse() {
+            Ok(tokens) => return tokens,
+            Err(_) => return item,
+        }
+    }
+    
+    // For actual compilation, use the full implementation
+    hyperprocess_impl(attr, item)
+}
 
 //------------------------------------------------------------------------------
 // Type Definitions
@@ -65,10 +126,14 @@ struct HandlerGroups<'a> {
 
 impl<'a> HandlerGroups<'a> {
     fn from_function_metadata(metadata: &'a [FunctionMetadata]) -> Self {
+        let local: Vec<&'a FunctionMetadata> = metadata.iter().filter(|f| f.is_local).collect();
+        let remote: Vec<&'a FunctionMetadata> = metadata.iter().filter(|f| f.is_remote).collect();
+        let http: Vec<&'a FunctionMetadata> = metadata.iter().filter(|f| f.is_http).collect();
+        
         HandlerGroups {
-            local: metadata.iter().filter(|f| f.is_local).collect(),
-            remote: metadata.iter().filter(|f| f.is_remote).collect(),
-            http: metadata.iter().filter(|f| f.is_http).collect(),
+            local,
+            remote,
+            http,
         }
     }
 }
@@ -207,6 +272,73 @@ fn has_valid_self_receiver(method: &syn::ImplItemFn) -> bool {
 }
 
 //------------------------------------------------------------------------------
+// Real Macro Implementation
+//------------------------------------------------------------------------------
+
+/// The real implementation of the hyperprocess macro for compilation
+fn hyperprocess_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse the input
+    let attr_args = parse_macro_input!(attr as MetaList);
+    let impl_block = parse_macro_input!(item as ItemImpl);
+
+    // Parse the macro arguments
+    let args = match parse_args(attr_args) {
+        Ok(args) => args,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    // Get the self type from the implementation block
+    let self_ty = &impl_block.self_ty;
+
+    // Analyze the methods in the implementation block
+    let (init_method, ws_method, function_metadata) = match analyze_methods(&impl_block) {
+        Ok(methods) => methods,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    // Filter functions by handler type
+    let handlers = HandlerGroups::from_function_metadata(&function_metadata);
+
+    // Generate Request and Response enums
+    let (request_enum, response_enum) = generate_request_response_enums(&function_metadata);
+
+    // Generate handler match arms
+    let handler_arms = HandlerDispatch {
+        local: generate_handler_dispatch(&handlers.local, self_ty, HandlerType::Local),
+        remote: generate_handler_dispatch(&handlers.remote, self_ty, HandlerType::Remote),
+        http: generate_handler_dispatch(&handlers.http, self_ty, HandlerType::Http),
+    };
+
+    // Clean the implementation block
+    let cleaned_impl_block = clean_impl_block(&impl_block);
+
+    // Prepare init method details for code generation
+    let init_method_details = InitMethodDetails {
+        identifier: init_method_opt_to_token(&init_method),
+        call: init_method_opt_to_call(&init_method, self_ty),
+    };
+
+    // Prepare WebSocket method details for code generation
+    let ws_method_details = WsMethodDetails {
+        identifier: ws_method_opt_to_token(&ws_method),
+        call: ws_method_opt_to_call(&ws_method),
+    };
+
+    // Generate the final output
+    generate_component_impl(
+        &args,
+        self_ty,
+        &cleaned_impl_block,
+        &request_enum,
+        &response_enum,
+        &init_method_details,
+        &ws_method_details,
+        &handler_arms,
+    )
+    .into()
+}
+
+//------------------------------------------------------------------------------
 // Argument Parsing Functions
 //------------------------------------------------------------------------------
 
@@ -227,7 +359,13 @@ fn parse_args(attr_args: MetaList) -> syn::Result<HyperProcessArgs> {
 
     for arg in &attr_args.0 {
         if let Meta::NameValue(nv) = arg {
-            let key = nv.path.get_ident().unwrap().to_string();
+            let path_ident = nv.path.get_ident();
+            if path_ident.is_none() {
+                return Err(syn::Error::new(nv.path.span(), "Expected identifier"));
+            }
+            
+            let key: String = path_ident.unwrap().to_string();
+            
             match key.as_str() {
                 "name" => {
                     name = Some(parse_string_literal(&nv.value, nv.value.span())?);
@@ -332,7 +470,8 @@ fn validate_websocket_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     let blob_param = &params[2];
 
     if let syn::FnArg::Typed(pat_type) = channel_id_param {
-        if !pat_type.ty.to_token_stream().to_string().contains("u32") {
+        let type_str = pat_type.ty.to_token_stream().to_string();
+        if !type_str.contains("u32") {
             return Err(syn::Error::new_spanned(
                 pat_type,
                 "First parameter of WebSocket method must be channel_id: u32",
@@ -351,12 +490,8 @@ fn validate_websocket_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     }
 
     if let syn::FnArg::Typed(pat_type) = blob_param {
-        if !pat_type
-            .ty
-            .to_token_stream()
-            .to_string()
-            .contains("LazyLoadBlob")
-        {
+        let type_str = pat_type.ty.to_token_stream().to_string();
+        if !type_str.contains("LazyLoadBlob") {
             return Err(syn::Error::new_spanned(
                 pat_type,
                 "Third parameter of WebSocket method must be blob: LazyLoadBlob",
@@ -412,11 +547,11 @@ fn analyze_methods(
             let ident = method.sig.ident.clone();
 
             // Check for method attributes
-            let has_init = has_attribute(method, "init");
-            let has_http = has_attribute(method, "http");
-            let has_local = has_attribute(method, "local");
-            let has_remote = has_attribute(method, "remote");
-            let has_ws = has_attribute(method, "ws");
+            let has_init: bool = has_attribute(method, "init");
+            let has_http: bool = has_attribute(method, "http");
+            let has_local: bool = has_attribute(method, "local");
+            let has_remote: bool = has_attribute(method, "remote");
+            let has_ws: bool = has_attribute(method, "ws");
 
             // Handle init method
             if has_init {
@@ -485,9 +620,10 @@ fn extract_function_metadata(
     is_http: bool,
 ) -> FunctionMetadata {
     let ident = method.sig.ident.clone();
+    let ident_str: String = ident.to_string();
 
     // Extract parameter types (skipping &mut self)
-    let params = method
+    let params: Vec<syn::Type> = method
         .sig
         .inputs
         .iter()
@@ -502,13 +638,13 @@ fn extract_function_metadata(
         .collect();
 
     // Extract return type
-    let return_type = match &method.sig.output {
+    let return_type: Option<syn::Type> = match &method.sig.output {
         ReturnType::Default => None, // () - no explicit return
         ReturnType::Type(_, ty) => Some((**ty).clone()),
     };
 
     // Create variant name (snake_case to CamelCase)
-    let variant_name = to_camel_case(&ident.to_string());
+    let variant_name: String = to_camel_case(&ident_str);
 
     FunctionMetadata {
         name: ident,
@@ -534,30 +670,36 @@ fn generate_request_response_enums(
         return (quote! {}, quote! {});
     }
 
-    // Request enum variants
-    let request_variants = function_metadata.iter().map(|func| {
-        let variant_name = format_ident!("{}", &func.variant_name);
-        generate_enum_variant(&variant_name, &func.params)
-    });
+    // Generate request enum variants
+    let request_variants: Vec<proc_macro2::TokenStream> = function_metadata
+        .iter()
+        .map(|func| {
+            let variant_name = format_ident!("{}", &func.variant_name);
+            generate_enum_variant(&variant_name, &func.params)
+        })
+        .collect();
 
-    // Response enum variants
-    let response_variants = function_metadata.iter().map(|func| {
-        let variant_name = format_ident!("{}", &func.variant_name);
+    // Generate response enum variants
+    let response_variants: Vec<proc_macro2::TokenStream> = function_metadata
+        .iter()
+        .map(|func| {
+            let variant_name = format_ident!("{}", &func.variant_name);
 
-        if let Some(return_type) = &func.return_type {
-            let type_str = return_type.to_token_stream().to_string();
-            if type_str == "()" {
-                // Unit variant for () return type
-                quote! { #variant_name }
+            if let Some(return_type) = &func.return_type {
+                let type_str = return_type.to_token_stream().to_string();
+                if type_str == "()" {
+                    // Unit variant for () return type
+                    quote! { #variant_name }
+                } else {
+                    // Tuple variant with return type
+                    quote! { #variant_name(#return_type) }
+                }
             } else {
-                // Tuple variant with return type
-                quote! { #variant_name(#return_type) }
+                // Unit variant for no explicit return
+                quote! { #variant_name }
             }
-        } else {
-            // Unit variant for no explicit return
-            quote! { #variant_name }
-        }
-    });
+        })
+        .collect();
 
     // Generate the enum definitions with serialization derives
     (
@@ -621,9 +763,12 @@ fn generate_handler_dispatch(
         HandlerType::Http => "http",
     };
 
-    let dispatch_arms = handlers
-        .iter()
-        .map(|func| generate_handler_dispatch_arm(func, self_ty, handler_type, type_name));
+    // Generate each match arm separately to make code clearer for Rust Analyzer
+    let mut dispatch_arms: Vec<proc_macro2::TokenStream> = Vec::new();
+    for func in handlers {
+        let arm = generate_handler_dispatch_arm(func, self_ty, handler_type, type_name);
+        dispatch_arms.push(arm);
+    }
 
     // Add an explicit unreachable for other variants
     let unreachable_arm = quote! {
@@ -649,13 +794,121 @@ fn generate_handler_dispatch_arm(
     let variant_name = format_ident!("{}", &func.variant_name);
 
     // Get the appropriate response handling code
-    let response_handling =
-        generate_response_handling(func, &variant_name, handler_type, type_name);
+    let response_handling = generate_response_handling(
+        func, 
+        &variant_name, 
+        handler_type, 
+        type_name
+    );
 
     if func.is_async {
-        generate_async_handler_arm(func, self_ty, fn_name, &variant_name, response_handling)
+        // Generate for async handler
+        if func.params.is_empty() {
+            // No parameters
+            quote! {
+                Request::#variant_name => {
+                    // SAFETY: We're using a raw pointer to access state from within an async block.
+                    // This is safe because:
+                    // 1. The state object outlives the async block
+                    // 2. We're using a mutable pointer to a mutable reference, preserving aliasing rules
+                    // 3. The pointer is only used within this async block
+                    let state_ptr: *mut #self_ty = state;
+                    hyperware_app_common::hyper! {
+                        // Inside the async block, use the pointer to access state
+                        let result = unsafe { (*state_ptr).#fn_name().await };
+                        #response_handling
+                    }
+                }
+            }
+        } else if func.params.len() == 1 {
+            // Single parameter
+            quote! {
+                Request::#variant_name(param) => {
+                    let param_captured = param;  // Capture param before moving into async block
+                    
+                    // SAFETY: We're using a raw pointer to access state from within an async block.
+                    // This is safe because:
+                    // 1. The state object outlives the async block
+                    // 2. We're using a mutable pointer to a mutable reference, preserving aliasing rules
+                    // 3. The pointer is only used within this async block
+                    let state_ptr: *mut #self_ty = state;
+                    hyperware_app_common::hyper! {
+                        // Inside the async block, use the pointer to access state
+                        let result = unsafe { (*state_ptr).#fn_name(param_captured).await };
+                        #response_handling
+                    }
+                }
+            }
+        } else {
+            // Multiple parameters
+            let param_count = func.params.len();
+            
+            // Generate parameter names (param0, param1, etc.)
+            let mut param_names: Vec<proc_macro2::Ident> = Vec::with_capacity(param_count);
+            let mut capture_statements: Vec<proc_macro2::TokenStream> = Vec::with_capacity(param_count);
+            let mut captured_names: Vec<proc_macro2::Ident> = Vec::with_capacity(param_count);
+            
+            for i in 0..param_count {
+                let param = format_ident!("param{}", i);
+                let captured = format_ident!("param{}_captured", i);
+                param_names.push(param.clone());
+                capture_statements.push(quote! { let #captured = #param; });
+                captured_names.push(captured);
+            }
+
+            quote! {
+                Request::#variant_name(#(#param_names),*) => {
+                    // Capture all parameters before moving into async block
+                    #(#capture_statements)*
+                    
+                    // SAFETY: We're using a raw pointer to access state from within an async block.
+                    // This is safe because:
+                    // 1. The state object outlives the async block
+                    // 2. We're using a mutable pointer to a mutable reference, preserving aliasing rules
+                    // 3. The pointer is only used within this async block
+                    let state_ptr: *mut #self_ty = state;
+                    hyperware_app_common::hyper! {
+                        // Inside the async block, use the pointer to access state
+                        let result = unsafe { (*state_ptr).#fn_name(#(#captured_names),*).await };
+                        #response_handling
+                    }
+                }
+            }
+        }
     } else {
-        generate_sync_handler_arm(func, fn_name, &variant_name, response_handling)
+        // Generate for sync handler
+        if func.params.is_empty() {
+            quote! {
+                Request::#variant_name => {
+                    let result = unsafe { (*state).#fn_name() };
+                    #response_handling
+                }
+            }
+        } else if func.params.len() == 1 {
+            quote! {
+                Request::#variant_name(param) => {
+                    let result = unsafe { (*state).#fn_name(param) };
+                    #response_handling
+                }
+            }
+        } else {
+            let param_count = func.params.len();
+            let mut param_names: Vec<proc_macro2::Ident> = Vec::with_capacity(param_count);
+            
+            for i in 0..param_count {
+                let param = format_ident!("param{}", i);
+                param_names.push(param);
+            }
+            
+            let param_names2 = param_names.clone();
+
+            quote! {
+                Request::#variant_name(#(#param_names),*) => {
+                    let result = unsafe { (*state).#fn_name(#(#param_names2),*) };
+                    #response_handling
+                }
+            }
+        }
     }
 }
 
@@ -664,7 +917,7 @@ fn generate_response_handling(
     _func: &FunctionMetadata,
     variant_name: &syn::Ident,
     handler_type: HandlerType,
-    type_name: &str,
+    _type_name: &str,
 ) -> proc_macro2::TokenStream {
     match handler_type {
         HandlerType::Local | HandlerType::Remote => {
@@ -684,103 +937,6 @@ fn generate_response_handling(
                     None,
                     response_bytes
                 );
-            }
-        }
-    }
-}
-
-/// Generate a match arm for an async handler
-fn generate_async_handler_arm(
-    func: &FunctionMetadata,
-    self_ty: &Box<syn::Type>,
-    fn_name: &syn::Ident,
-    variant_name: &syn::Ident,
-    response_handling: proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    if func.params.is_empty() {
-        // Async function with no parameters
-        quote! {
-            Request::#variant_name => {
-                // Create a raw pointer to state for use in the async block
-                let state_ptr: *mut #self_ty = state;
-                hyperware_app_common::hyper! {
-                    // Inside the async block, use the pointer to access state
-                    let result = unsafe { (*state_ptr).#fn_name().await };
-                    #response_handling
-                }
-            }
-        }
-    } else if func.params.len() == 1 {
-        // Async function with a single parameter
-        quote! {
-            Request::#variant_name(param) => {
-                let param_captured = param;  // Capture param before moving into async block
-                // Create a raw pointer to state for use in the async block
-                let state_ptr: *mut #self_ty = state;
-                hyperware_app_common::hyper! {
-                    // Inside the async block, use the pointer to access state
-                    let result = unsafe { (*state_ptr).#fn_name(param_captured).await };
-                    #response_handling
-                }
-            }
-        }
-    } else {
-        // Async function with multiple parameters
-        let param_count = func.params.len();
-        let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
-        let capture_statements = (0..param_count).map(|i| {
-            let param = format_ident!("param{}", i);
-            let captured = format_ident!("param{}_captured", i);
-            quote! { let #captured = #param; }
-        });
-        let captured_names = (0..param_count).map(|i| format_ident!("param{}_captured", i));
-
-        quote! {
-            Request::#variant_name(#(#param_names),*) => {
-                // Capture all parameters before moving into async block
-                #(#capture_statements)*
-                // Create a raw pointer to state for use in the async block
-                let state_ptr: *mut #self_ty = state;
-                hyperware_app_common::hyper! {
-                    // Inside the async block, use the pointer to access state
-                    let result = unsafe { (*state_ptr).#fn_name(#(#captured_names),*).await };
-                    #response_handling
-                }
-            }
-        }
-    }
-}
-
-/// Generate a match arm for a sync handler
-fn generate_sync_handler_arm(
-    func: &FunctionMetadata,
-    fn_name: &syn::Ident,
-    variant_name: &syn::Ident,
-    response_handling: proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    if func.params.is_empty() {
-        quote! {
-            Request::#variant_name => {
-                let result = unsafe { (*state).#fn_name() };
-                #response_handling
-            }
-        }
-    } else if func.params.len() == 1 {
-        quote! {
-            Request::#variant_name(param) => {
-                let result = unsafe { (*state).#fn_name(param) };
-                #response_handling
-            }
-        }
-    } else {
-        let param_count = func.params.len();
-        let param_names = (0..param_count).map(|i| format_ident!("param{}", i));
-        let param_names2 = param_names.clone();
-
-        quote! {
-            Request::#variant_name(#(#param_names),*) => {
-                let result = unsafe { (*state).#fn_name(#(#param_names2),*) };
-                #response_handling
             }
         }
     }
@@ -806,7 +962,11 @@ fn init_method_opt_to_call(
 ) -> proc_macro2::TokenStream {
     if let Some(method_name) = init_method {
         quote! {
-            // Create a pointer to state for use in the async block
+            // SAFETY: We're using a raw pointer to access state from within an async block.
+            // This is safe because:
+            // 1. The state object outlives the async block
+            // 2. We're using a mutable pointer to a mutable reference, preserving aliasing rules
+            // 3. The pointer is only used within this async block
             let state_ptr: *mut #self_ty = &mut state;
             hyperware_app_common::hyper! {
                 // Inside the async block, use the pointer to access state
@@ -842,10 +1002,26 @@ fn generate_message_handlers(
     handler_arms: &HandlerDispatch,
     ws_method_call: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let http_request_match_arms = &handler_arms.http;
-    let local_request_match_arms = &handler_arms.local;
-    let remote_request_match_arms = &handler_arms.remote;
+    // Split the generation into separate functions for better clarity
+    let http_handler = generate_http_server_handler(self_ty, &handler_arms.http, ws_method_call);
+    let local_handler = generate_local_message_handler(self_ty, &handler_arms.local);
+    let remote_handler = generate_remote_message_handler(self_ty, &handler_arms.remote);
+    
+    quote! {
+        #http_handler
+        
+        #local_handler
+        
+        #remote_handler
+    }
+}
 
+/// Generate HTTP server message handler
+fn generate_http_server_handler(
+    self_ty: &Box<syn::Type>,
+    http_request_match_arms: &proc_macro2::TokenStream,
+    ws_method_call: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
     quote! {
         /// Handle messages from the HTTP server
         fn handle_http_server_message(state: *mut #self_ty, message: hyperware_process_lib::Message) {
@@ -932,7 +1108,15 @@ fn generate_message_handlers(
                 }
             }
         }
+    }
+}
 
+/// Generate local message handler
+fn generate_local_message_handler(
+    self_ty: &Box<syn::Type>,
+    local_request_match_arms: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    quote! {
         /// Handle local messages
         fn handle_local_message(state: *mut #self_ty, message: hyperware_process_lib::Message) {
             match serde_json::from_slice::<serde_json::Value>(message.body()) {
@@ -958,7 +1142,15 @@ fn generate_message_handlers(
                 }
             }
         }
+    }
+}
 
+/// Generate remote message handler
+fn generate_remote_message_handler(
+    self_ty: &Box<syn::Type>,
+    remote_request_match_arms: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    quote! {
         /// Handle remote messages
         fn handle_remote_message(state: *mut #self_ty, message: hyperware_process_lib::Message) {
             match serde_json::from_slice::<serde_json::Value>(message.body()) {
@@ -987,45 +1179,10 @@ fn generate_message_handlers(
     }
 }
 
-/// Generate the full component implementation
-fn generate_component_impl(
-    args: &HyperProcessArgs,
-    self_ty: &Box<syn::Type>,
-    cleaned_impl_block: &ItemImpl,
-    request_enum: &proc_macro2::TokenStream,
-    response_enum: &proc_macro2::TokenStream,
-    init_method_details: &InitMethodDetails,
-    ws_method_details: &WsMethodDetails,
-    handler_arms: &HandlerDispatch,
-) -> proc_macro2::TokenStream {
-    // Extract values from args for use in the quote macro
-    let name = &args.name;
-    let endpoints = &args.endpoints;
-    let _save_config = &args.save_config;
+/// Generate the wit binding code
+fn generate_wit_binding(args: &HyperProcessArgs) -> proc_macro2::TokenStream {
     let wit_world = &args.wit_world;
-
-    let icon = match &args.icon {
-        Some(icon_str) => quote! { Some(#icon_str.to_string()) },
-        None => quote! { None },
-    };
-
-    let widget = match &args.widget {
-        Some(widget_str) => quote! { Some(#widget_str.to_string()) },
-        None => quote! { None },
-    };
-
-    let ui = match &args.ui {
-        Some(ui_expr) => quote! { Some(#ui_expr) },
-        None => quote! { None },
-    };
-
-    let init_method_ident = &init_method_details.identifier;
-    let init_method_call = &init_method_details.call;
-    let ws_method_call = &ws_method_details.call;
-
-    // Generate message handler functions
-    let message_handlers = generate_message_handlers(self_ty, handler_arms, ws_method_call);
-
+    
     quote! {
         wit_bindgen::generate!({
             path: "target/wit",
@@ -1041,15 +1198,54 @@ fn generate_component_impl(
         use hyperware_process_lib::http::server::HttpBindingConfig;
         use hyperware_process_lib::http::server::WsBindingConfig;
         use hyperware_app_common::Binding;
+    }
+}
 
-        #cleaned_impl_block
-
+/// Generate the full component implementation by combining all parts
+fn generate_component_impl(
+    args: &HyperProcessArgs,
+    self_ty: &Box<syn::Type>,
+    cleaned_impl_block: &ItemImpl,
+    request_enum: &proc_macro2::TokenStream,
+    response_enum: &proc_macro2::TokenStream,
+    init_method_details: &InitMethodDetails,
+    ws_method_details: &WsMethodDetails,
+    handler_arms: &HandlerDispatch,
+) -> proc_macro2::TokenStream {
+    // Generate each part separately
+    let wit_binding = generate_wit_binding(args);
+    let struct_impl = quote! { #cleaned_impl_block };
+    let enums = quote! {
         // Add our generated request/response enums
         #request_enum
         #response_enum
+    };
+    let message_handlers = generate_message_handlers(self_ty, handler_arms, &ws_method_details.call);
+    
+    // Generate component struct
+    let name = &args.name;
+    let init_method_ident = &init_method_details.identifier;
+    let init_method_call = &init_method_details.call;
+    
+    // Extract icon, widget, and UI from args
+    let icon = match &args.icon {
+        Some(icon_str) => quote! { Some(#icon_str.to_string()) },
+        None => quote! { None },
+    };
 
-        #message_handlers
+    let widget = match &args.widget {
+        Some(widget_str) => quote! { Some(#widget_str.to_string()) },
+        None => quote! { None },
+    };
 
+    let ui = match &args.ui {
+        Some(ui_expr) => quote! { Some(#ui_expr) },
+        None => quote! { None },
+    };
+    
+    let endpoints = &args.endpoints;
+    
+    let component_struct = quote! {
         struct Component;
         impl Guest for Component {
             fn init(_our: String) {
@@ -1161,7 +1357,6 @@ fn generate_component_impl(
                                     });
                                 }
                             }
-
                         }
                     }
                 }
@@ -1169,73 +1364,18 @@ fn generate_component_impl(
         }
 
         export!(Component);
+    };
+
+    // Combine all parts into a single token stream
+    quote! {
+        #wit_binding
+        
+        #struct_impl
+        
+        #enums
+        
+        #message_handlers
+        
+        #component_struct
     }
-}
-
-//------------------------------------------------------------------------------
-// Main Macro Implementation
-//------------------------------------------------------------------------------
-
-/// The main procedural macro
-#[proc_macro_attribute]
-pub fn hyperprocess(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Parse the input
-    let attr_args = parse_macro_input!(attr as MetaList);
-    let impl_block = parse_macro_input!(item as ItemImpl);
-
-    // Parse the macro arguments
-    let args = match parse_args(attr_args) {
-        Ok(args) => args,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    // Get the self type from the implementation block
-    let self_ty = &impl_block.self_ty;
-
-    // Analyze the methods in the implementation block
-    let (init_method, ws_method, function_metadata) = match analyze_methods(&impl_block) {
-        Ok(methods) => methods,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    // Filter functions by handler type
-    let handlers = HandlerGroups::from_function_metadata(&function_metadata);
-
-    // Generate Request and Response enums
-    let (request_enum, response_enum) = generate_request_response_enums(&function_metadata);
-
-    // Generate handler match arms
-    let handler_arms = HandlerDispatch {
-        local: generate_handler_dispatch(&handlers.local, self_ty, HandlerType::Local),
-        remote: generate_handler_dispatch(&handlers.remote, self_ty, HandlerType::Remote),
-        http: generate_handler_dispatch(&handlers.http, self_ty, HandlerType::Http),
-    };
-
-    // Clean the implementation block
-    let cleaned_impl_block = clean_impl_block(&impl_block);
-
-    // Prepare init method details for code generation
-    let init_method_details = InitMethodDetails {
-        identifier: init_method_opt_to_token(&init_method),
-        call: init_method_opt_to_call(&init_method, self_ty),
-    };
-
-    // Prepare WebSocket method details for code generation
-    let ws_method_details = WsMethodDetails {
-        identifier: ws_method_opt_to_token(&ws_method),
-        call: ws_method_opt_to_call(&ws_method),
-    };
-
-    // Generate the final output
-    generate_component_impl(
-        &args,
-        self_ty,
-        &cleaned_impl_block,
-        &request_enum,
-        &response_enum,
-        &init_method_details,
-        &ws_method_details,
-        &handler_arms,
-    )
-    .into()
 }

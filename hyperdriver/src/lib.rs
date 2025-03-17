@@ -144,17 +144,23 @@ async fn fetch_data(endpoint: &str, id: i32) -> String {
     //         publisher_node: "uncentered.os".to_string(),
     //     },
     // };
-    use crate::hyperware::process::receiver_b::{SomeStruct, SomeEnum};
+    use crate::hyperware::process::receiver_b::{SomeStruct as Poob, SomeEnum};
     use crate::hyperware_async::hello_local_rpc;
+    use crate::hyperware_async::call_me_local_rpc;
 
-    let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-    let some_struct = SomeStruct {
+    let address_1: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
+    let address_2: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
+    let some_struct = Poob {
         field_one: "test".to_string(),
         field_two: 42,
         field_three: SomeEnum::VariantOne("test".to_string()),
     };
-    hello_local_rpc(address, some_struct);
-    
+    let a = hello_local_rpc(address_1, some_struct).await;
+    kiprintln!("A: {:?}", a);
+
+    let b = call_me_local_rpc(address_2, 32).await;
+    kiprintln!("B: {:?}", b);
+
     
 
     format!("Data from {} for id {}", endpoint, id)
