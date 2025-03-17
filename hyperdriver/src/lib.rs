@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use hyperware_process_lib::kiprintln;
 use hyperware::process::standard::Address as WitAddress;
-use shared::receiver_address_a;
+use shared::{receiver_address_a, receiver_address_b};
 use caller_utils::wit_custom::SomeEnum;
 use caller_utils::SomeStruct;
 
@@ -45,12 +45,12 @@ impl AsyncRequesterState {
         std::thread::sleep(std::time::Duration::from_secs(3));
         kiprintln!("Sending request");
 
-        let result = hello_local_rpc(&receiver_address_a(), SomeStruct {
+        let result = hello_local_rpc(&receiver_address_b(), SomeStruct {
             field_one: "test".to_string(),
             field_two: 42,
             field_three: SomeEnum::VariantOne("test".to_string()),
         }).await;
-        // kiprintln!("Received result {:?}", result);
+        kiprintln!("Received result {:?}", result);
         // let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
         // let result = send::<String>(&json!({"CallMe": (42, 1337)}), address, 30).await;
         // kiprintln!("Received result {:?}", result);
