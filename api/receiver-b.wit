@@ -1,0 +1,29 @@
+interface receiver-b {
+    // This interface contains function signature definitions that will be used
+    // by the hyper-bindgen macro to generate async function bindings.
+    //
+    // NOTE: This is currently a hacky workaround since WIT async functions are not
+    // available until WASI Preview 3. Once Preview 3 is integrated into Hyperware,
+    // we should switch to using proper async WIT function signatures instead of
+    // this struct-based approach with hyper-bindgen generating the async stubs.
+
+    use standard.{address};
+
+    record some-struct {
+        field-one: string,
+        field-two: s32,
+        field-three: some-enum
+    }
+
+    variant some-enum {
+        variant-one(string),
+        variant-two(s32)
+    }
+
+    // Function signature for: hello (local)
+    record hello-signature-local {
+        target: address,
+        struct-val: some-struct,
+        returning: f32
+    }
+}
