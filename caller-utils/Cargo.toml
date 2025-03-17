@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[package.metadata.component]
-package = "hyperware:process"
-
 [dependencies]
 anyhow = "1.0"
 hyperware_process_lib = { version = "1.0.2", features = ["logging"] }

@@ -1,8 +1,7 @@
 #![allow(warnings)] 
 
 use caller_utils::receiver_b::hello_local_rpc;
-// use caller_utils::receiver_b::hello_local_rpc;
-// TODO: Zena: Remove this and fix warnings
+use caller_utils::receiver_a::call_me_local_rpc;
 use hyperprocess_macro::hyperprocess;
 use hyperware::process::standard::ProcessId;
 use hyperware_app_common::State;
@@ -51,16 +50,13 @@ impl AsyncRequesterState {
             field_three: SomeEnum::VariantOne("test".to_string()),
         }).await;
         kiprintln!("Received result {:?}", result);
-        // let address: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-        // let result = send::<String>(&json!({"CallMe": (42, 1337)}), address, 30).await;
-        // kiprintln!("Received result {:?}", result);
-        // let address: Address = ("our", "receiver-b", "async-app", "uncentered.os").into();
-        // let result = send::<Value>(&json!({"Hello": "Mash Potatoes"}), address, 30).await;
-        // kiprintln!("Received result {:?}", result);
 
-        // kiprintln!("Sleeping more");
-        // std::thread::sleep(std::time::Duration::from_secs(3));
-        // fetch_data("users", 1337).await;
+        kiprintln!("Sleeping more");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let result = call_me_local_rpc(&receiver_address_a(), 42, 1337).await;
+        kiprintln!("Received result {:?}", result);
+
+        kiprintln!("LFG!");
     }
 
     #[http]
@@ -158,25 +154,6 @@ impl AsyncRequesterState {
 
 async fn fetch_data(endpoint: &str, id: i32) -> String {
     kiprintln!("Fetching data from {} with id {}", endpoint, id);
-    // use crate::hyperware::process::receiver_b::{SomeStruct as Poob, SomeEnum};
-    // use crate::hyperware_async::hello_local_rpc;
-    // use crate::hyperware_async::call_me_local_rpc;
-
-    // let address_1: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-    // let address_2: Address = ("our", "receiver-a", "async-app", "uncentered.os").into();
-    // let some_struct = Poob {
-    //     field_one: "test".to_string(),
-    //     field_two: 42,
-    //     field_three: SomeEnum::VariantOne("test".to_string()),
-    // };
-    // let a = hello_local_rpc(address_1, some_struct).await;
-    // kiprintln!("A: {:?}", a);
-
-    // let b = call_me_local_rpc(address_2, 32).await;
-    // kiprintln!("B: {:?}", b);
-
-    
-
     format!("Data from {} for id {}", endpoint, id)
 }
 
