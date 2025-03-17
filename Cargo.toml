@@ -9,5 +9,6 @@ members = [
     "lib/shared",
     "receiver-a",
     "receiver-b",
+    "caller-utils",
 ]
 resolver = "2"

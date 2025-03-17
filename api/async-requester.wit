@@ -9,6 +9,13 @@ interface async-requester {
 
     use standard.{address};
 
+    // Function signature for: jaxs-ribs (http)
+    record jaxs-ribs-signature-http {
+        target: string,
+        value: s32,
+        returning: string
+    }
+
     // Function signature for: increment-counter (local)
     record increment-counter-signature-local {
         target: address,

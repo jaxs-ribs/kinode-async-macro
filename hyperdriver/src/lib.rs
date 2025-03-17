@@ -50,6 +50,14 @@ impl AsyncRequesterState {
         fetch_data("users", 1337).await;
     }
 
+    #[http]
+    async fn jaxs_ribs(&mut self, value: i32) -> String {
+        kiprintln!("Sending request");
+        self.request_count += 1;
+        kiprintln!("Counter: {}", self.request_count);
+        "some string".to_string()
+    }
+
     #[local]
     async fn increment_counter(
         &mut self,

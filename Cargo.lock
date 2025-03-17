@@ -879,6 +879,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "caller-utils"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "futures-util",
+ "hyperware_app_common",
+ "hyperware_process_lib",
+ "once_cell",
+ "process_macros",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1577,6 +1594,7 @@ name = "hyperdriver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "caller-utils",
  "futures",
  "futures-util",
  "hyperprocess_macro",
@@ -2483,6 +2501,7 @@ name = "receiver-a"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "caller-utils",
  "futures",
  "futures-util",
  "hyperprocess_macro",
@@ -2502,6 +2521,7 @@ name = "receiver-b"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "caller-utils",
  "futures",
  "futures-util",
  "hyperprocess_macro",
