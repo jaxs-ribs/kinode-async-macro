@@ -18,34 +18,6 @@ pub use hyperware::process::standard::Address as WitAddress;
 pub use crate::hyperware::process::receiver_b::SomeStruct;
 pub use crate::hyperware::process::receiver_b::SomeEnum;
 
-/// Generated RPC stubs for the receiver_b interface
-pub mod receiver_b {
-    use crate::*;
-
-    /// Generated stub for `hello` local RPC call
-    /// This function provides a placeholder implementation that returns default values
-    pub async fn hello_local_rpc(target: &WitAddress, struct_val: SomeStruct) -> f32 {
-        // TODO: Implement actual RPC call
-        0.0
-    }
-    
-    
-}
-
-/// Generated RPC stubs for the receiver_a interface
-pub mod receiver_a {
-    use crate::*;
-
-    /// Generated stub for `call-me` local RPC call
-    /// This function provides a placeholder implementation that returns default values
-    pub async fn call_me_local_rpc(target: &WitAddress, value: i32) -> String {
-        // TODO: Implement actual RPC call
-        String::new()
-    }
-    
-    
-}
-
 /// Generated RPC stubs for the async_requester interface
 pub mod async_requester {
     use crate::*;
@@ -118,6 +90,34 @@ pub mod async_requester {
     pub async fn increment_counter_four_http_rpc(target: &str, string_val: String) -> f32 {
         // TODO: Implement actual RPC call
         0.0
+    }
+    
+    
+}
+
+/// Generated RPC stubs for the receiver_b interface
+pub mod receiver_b {
+    use crate::*;
+
+    /// Generated stub for `hello` local RPC call
+    /// This function provides a placeholder implementation that returns default values
+    pub async fn hello_local_rpc(target: &WitAddress, struct_val: SomeStruct) -> f32 {
+        // TODO: Implement actual RPC call
+        0.0
+    }
+    
+    
+}
+
+/// Generated RPC stubs for the receiver_a interface
+pub mod receiver_a {
+    use crate::*;
+
+    /// Generated stub for `call-me` local RPC call
+    /// This function provides a placeholder implementation that returns default values
+    pub async fn call_me_local_rpc(target: &WitAddress, value: i32) -> String {
+        // TODO: Implement actual RPC call
+        String::new()
     }
     
     
